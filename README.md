@@ -348,10 +348,11 @@ why their `(112)` reports appeared under bare `step` all along. `t/wptrtest.py` 
 both rules and classify which one the binary under test implements.
 
 **(10) Two usage lines that lied.** `var`'s usage read `var name [memory addr [bit]]`, where
-`memory` was a placeholder and not a keyword; people typed it literally, got a `Parser error`, and
-the real cell form stayed hidden. It now reads
-`var name [mem addr [bit_nr [bit_nr_high]]] | var name mem[addr]`, and the literal `memory` form is
-refused instead of quietly binding the engine's own variable store. And `-d <portnum>` — the GDB
+`memory` is a placeholder and not a keyword: typed literally it is a `Parser error`, and it always
+has been — on this fork and on upstream `19d932c3` alike, so no cell was ever silently bound to the
+wrong thing. What the line actually did was hide the real forms, and it now reads
+`var name [mem addr [bit_nr [bit_nr_high]]] | var name mem[addr]`, with both advertised forms pinned
+by `t/bpcmdtest.py`. And `-d <portnum>` — the GDB
 remote server port — is back in `--help`: `app.cc` had its option text and the `DOPT` usage string
 commented out while `main()` still parsed it and assigned `rgdb_port`, so a working debugger feature
 was invisible.
