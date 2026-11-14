@@ -1,0 +1,35 @@
+$ /tmp/ucsim_51-prefix -q -t C52 /home/oleksiy/s51/upstream/ucsim-timer2/evidence/transcripts/mix-nop.hex
+step 205
+dump sfr 0xcc 0xcd
+state
+quit
+
+uCsim, Copyright (C) 1997 Daniel Drotos.
+uCsim comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+This is free software, and you are welcome to redistribute it
+under certain conditions; type `show c' for details.
+step 205
+dump sfr 0xcc 0xcd
+state
+quit
+
+Stop at 0x0000d7: (109) stepped 2520 ticks
+     R0 R1 R2 R3 R4 R5 R6 R7
+     41 58 fc c9 8b bc 95 6b
+@R0 76 v  ACC= 0x00   0 .  B= 0x00
+@R1 73 s  PSW= 0x00 CY=0 AC=0 OV=0 P=0
+SP 0x07 -> 6b 95 bc 8b c9 fc 58 41
+   DPTR= 0x0000 @DPTR= 0x83 131 .
+0x00d7    80 fe    SJMP   0x00d7                                     
+F 0x0000d7
+0xcc TL2:                 0b11001010 0xca '.' 202 (-54)
+0xcd TH2:                 0b00000000 0x00 '.'   0
+CPU state= OK PC= 0x0000d7 frequency= 11059200 HZ
+Operation since last reset= 220 vclks
+Inst= 205 Fetch= 215 Read= 0 Write= 5
+Total time since last reset= 0.000227864583333 sec (2520 clks)
+Time in isr = 0.000000000000000 sec (0 clks) 0.00%
+Time in idle= 0.000000000000000 sec (0 clks) 0.00%
+Most value of stack pointer= 0x000007
+Simulation: stopped
+Runtime: 0.010668 sec

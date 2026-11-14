@@ -1,0 +1,63 @@
+Provenance and licensing
+========================
+
+What this is
+------------
+
+Research work on the Atmel AT89C51RD2 / AT89C51ED2 for reverse engineering: a device-model and
+peripheral build-out on top of ucsim, a 22-suite verification bed, and the analysis notes that
+record what the datasheet actually says. Copyright (C) 2026 Oleksiy <alexian79@gmail.com>.
+Distributed under GPL-2.0-or-later (see LICENSE), the same licence as ucsim, because the code here
+modifies and extends ucsim.
+
+The simulator base
+------------------
+
+Base tree: `CrispStrobe/ucsim-stc`, commit
+`441710c87dc93577caf1c64394eefb86b928eee2` (that commit is `origin/master`). It is NOT
+redistributed here. To reproduce the exact tree every suite in `t/` was run against:
+
+    git clone https://github.com/CrispStrobe/ucsim-stc vendor/ucsim-stc
+    git -C vendor/ucsim-stc checkout 441710c
+    git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
+    ./build.sh
+
+The patch touches 34 files: 24 modified (+1472 / -175) and 10 added (`rd2_boot`, `rd2_brg`,
+`rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`). It was verified by applying it to a fresh
+clone of that commit and comparing trees: `diff -rq` (build artefacts excluded) reports no
+content differences at all. `slices/` holds the two changes cut as self-contained, upstream-sized
+pieces -- the timer-2 `cycles` bug and the port-mirror double-notify -- each with its own patch,
+text and evidence.
+
+Attribution note: the 10 new files carry `Copyright (C) 2026 Oleksiy`. The fork's own new files
+(`stc12_*.cc`) carry `Copyright (C) 2026 CrispStrobe`; that header convention was copied, the
+authorship is not theirs.
+
+Datasheets are not included
+---------------------------
+
+`doc4235` (AT89C51RD2 datasheet) and `doc4316` (Atmel C51 Hardware Manual) are Atmel/Microchip
+copyrighted documents and are not redistributed here. The analysis documents cite them by section
+and by PRINTED page number (the datasheet's own numbering, which is offset from the PDF page
+index); no page text is reproduced at length. Obtain the PDFs from Microchip.
+
+Third-party trees referenced but not redistributed
+--------------------------------------------------
+
+    vendor/ucsim-stc/   the simulator (GPL-2.0-or-later) -- recipe above
+    vendor/cpu8051/     Simon Kuhn's independent C ISS, used as a third opinion
+    vendor/mcs51-rs/    Rust mcs51 assembler/linker/sim; `xval/Cargo.toml` path-deps expect it
+                        at vendor/mcs51-rs, so `cargo build` in xval/ needs that clone first
+    xval/               MY one-file driver that runs an image on the Rust i8051 core and prints
+                        a diffable trace; published here as source only (target/ excluded)
+
+Ghidra side lives elsewhere
+---------------------------
+
+The AT89C51RD2 Ghidra language is a separate repo, `ghidra-at89c51rd2` (Apache-2.0, because
+`rd2.sinc` is a derivative of Ghidra's `8051_main.sinc`), together with `langbuild`, `gh51` and
+the Ghidra scripts in `gh/`. The gated patch to Ghidra's shared include is
+`ghidra-8051-dual-dptr` (Apache-2.0). `t/langtest.py`, `t/rmwtest.py` and `t/banktest.py` are the
+Ghidra-side suites kept here for completeness of the bed; they need that language installed via
+`langbuild` first, and they are deliberately outside `t/floor.sh` because each starts a headless
+Ghidra. `gh/` is duplicated in the language repo so each repo runs on its own.

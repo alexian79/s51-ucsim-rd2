@@ -1,0 +1,67 @@
+From 19d932c36e1aaa117f018769a80010a8c85485e7 Mon Sep 17 00:00:00 2001
+From: oleksiy <oleksiy@localhost>
+Date: Sat, 14 Nov 2026 00:21:46 +0000
+Subject: [PATCH] s51: count every pending event in timer2 reload and capture
+
+do_t2_reload() and do_t2_capture() ignored their `cycles' argument and
+advanced the counter exactly once per tick(), while their siblings
+do_t2_baud(), do_t2_down() and do_t2_clock_out() all loop over it.
+
+cl_uc::tick_hw() always calls hw->tick(1), so in timer mode (C/T=0)
+`cycles' is 1 and nothing changes there.  But in counter mode (C/T=1)
+both functions replace `cycles' with the number of pending external
+edges (T_edge), and that is a real count: the unfixed code adds one
+count per tick whether 6 edges or 0 edges arrived, so events on T2 are
+silently dropped and, with no input at all, the counter still walks.
+
+Loop over `cycles' the same way do_t2_baud() does, preserving the
+reload/capture actions themselves.
+---
+ src/sims/s51.src/timer2.cc | 22 ++++++++++++----------
+ 1 file changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/src/sims/s51.src/timer2.cc b/src/sims/s51.src/timer2.cc
+index a69d598a..a835c9b0 100644
+--- a/src/sims/s51.src/timer2.cc
++++ b/src/sims/s51.src/timer2.cc
+@@ -224,10 +224,11 @@ cl_timer2::do_t2_capture(int cycles)
+   if (C_T)
+     (cycles= T_edge), T_edge= 0;
+ 
+-  if (!cell_tl->set(cell_tl->get() + 1))
++  while (cycles--)
+     {
+-      if (!cell_th->set(cell_th->get() + 1))
+-	cell_tcon->set(cell_tcon->get() | bmTF2);
++      if (!cell_tl->set(cell_tl->get() + 1))
++	if (!cell_th->set(cell_th->get() + 1))
++	  cell_tcon->set(cell_tcon->get() | bmTF2);
+     }
+ }
+ 
+@@ -253,14 +254,15 @@ cl_timer2::do_t2_reload(int cycles)
+   if (C_T)
+     (cycles= T_edge), T_edge= 0;
+ 
+-  if (!cell_tl->set(cell_tl->get() + 1))
++  while (cycles--)
+     {
+-      if (!cell_th->set(cell_th->get() + 1))
+-	{
+-	  cell_tcon->set(cell_tcon->get() | mask_TF);
+-	  cell_th->set(cell_rcap2h->get());
+-	  cell_tl->set(cell_rcap2l->get());
+-	}
++      if (!cell_tl->set(cell_tl->get() + 1))
++	if (!cell_th->set(cell_th->get() + 1))
++	  {
++	    cell_tcon->set(cell_tcon->get() | mask_TF);
++	    cell_th->set(cell_rcap2h->get());
++	    cell_tl->set(cell_rcap2l->get());
++	  }
+     }
+ }
+ 
+-- 
+2.53.0
+

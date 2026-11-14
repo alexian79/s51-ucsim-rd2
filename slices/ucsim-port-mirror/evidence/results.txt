@@ -1,0 +1,7 @@
+# t2cnttest.py, 30 legs, run 2026-11-14 (fork build of this exact code).
+## fixed binary (cfg->set):
+binary: /home/oleksiy/s51/vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51
+t2cnttest: PASS 30/30 legs
+## unfixed binary (cfg->write), same suite:
+t2cnttest: FAIL 9/30 legs
+t2cnttest: 21 leg(s) over-count/under-count edges

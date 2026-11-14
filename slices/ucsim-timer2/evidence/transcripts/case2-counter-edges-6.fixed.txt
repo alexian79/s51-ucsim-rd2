@@ -1,0 +1,62 @@
+$ /tmp/ucsim_51-fixed -q -t C52
+set memory sfr 0xc8 0x06
+set memory sfr 0xcc 0x00
+set memory sfr 0xcd 0x00
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+tick 1
+dump sfr 0xcc 0xcd
+quit
+
+uCsim, Copyright (C) 1997 Daniel Drotos.
+uCsim comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+This is free software, and you are welcome to redistribute it
+under certain conditions; type `show c' for details.
+set memory sfr 0xc8 0x06
+set memory sfr 0xcc 0x00
+set memory sfr 0xcd 0x00
+set memory sfr 0x90 0xff0xc8 T2CON:               0b00000110 0x06 '.'   6
+0xcc TL2:                 0b00000000 0x00 '.'   0
+0xcd TH2:                 0b00000000 0x00 '.'   0
+
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xf0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+f
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0x0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+ff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 0xff
+set memory sfr 0x90 0xfe
+set memory sfr 0x90 00x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0x90 P1:                  0b11111110 0xfe '.' 254 ( -2)
+xff
+tick 1
+dump sfr 0xcc 0xcd
+quit
+0x90 P1:                  0b11111111 0xff '.' 255 ( -1)
+0xcc TL2:                 0b00001100 0x0c '.'  12
+0xcd TH2:                 0b00000000 0x00 '.'   0

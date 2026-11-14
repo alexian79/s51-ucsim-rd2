@@ -1,0 +1,49 @@
+binary: /tmp/ucsim_51-prefix
+36a9764cd9cef93d19f943a4d0aca41cca8e2ca35568ae70d92f1ecaf642019d  /tmp/ucsim_51-prefix
+uCsim, Copyright (C) 1997 Daniel Drotos.
+binary: /tmp/ucsim_51-fixed
+d6b8baac68134facc890529e7600572d3b86cc17b3bf754b61dd438f783db307  /tmp/ucsim_51-fixed
+uCsim, Copyright (C) 1997 Daniel Drotos.
+================ timer 2 cycle contract (transcripts in transcripts/) =
+== case 1: counter mode (T2CON=0x06), NO input pulses, tick 5
+   TL2 before=5 after=0  (want 0)
+== case 2: counter mode, N falling edges queued, single tick
+   edges=1  TL2 before=1    after=2   
+   edges=2  TL2 before=1    after=4   
+   edges=3  TL2 before=1    after=6   
+   edges=4  TL2 before=1    after=8   
+   edges=6  TL2 before=1    after=12  
+== case 3: capture mode (T2CON=0x07), N falling edges queued, single tick
+   edges=1  TL2 before=1    after=2   
+   edges=2  TL2 before=1    after=4   
+   edges=3  TL2 before=1    after=6   
+   edges=4  TL2 before=1    after=8   
+   edges=6  TL2 before=1    after=12  
+== case 4 CONTROL: timer mode (T2CON=0x04), same machine cycles, different instruction mix
+   mov  instr=105  clks=2520/2520 TL2 before=202 after=202
+   mul  instr=55   clks=2520/2520 TL2 before=202 after=202
+   nop  instr=205  clks=2520/2520 TL2 before=202 after=202
+
+case                         input    unfixed TL2 fixed TL2 
+1 idle, tick 5               -        5          0         
+2 edges                      1        1          2         
+2 edges                      2        1          4         
+2 edges                      3        1          6         
+2 edges                      4        1          8         
+2 edges                      6        1          12        
+3 capture                    1        1          2         
+3 capture                    2        1          4         
+3 capture                    3        1          6         
+3 capture                    4        1          8         
+3 capture                    6        1          12        
+4 control mov (instr 105)    2520     202        202       
+4 control mul (instr 55)     2520     202        202       
+4 control nop (instr 205)    2520     202        202       
+
+transcripts: /home/oleksiy/s51/upstream/ucsim-timer2/evidence/transcripts
+
+================ s51 config test, 14 devices (out-config.*) ============
+devices compared: 14
+RESULT: fixed output is byte-identical to unfixed for every device
+
+see PR.md for the reading of these numbers

@@ -1,0 +1,36 @@
+--- /home/oleksiy/s51/vendor/ucsim-stc/ucsim/src/sims/s51.src/port.cc	2026-10-11 00:09:05.991511764 +0000
++++ /tmp/ucsim-t2cnt/ucsim/src/sims/s51.src/port.cc	2026-11-14 00:52:02.419221632 +0000
+@@ -161,8 +161,14 @@
+     {
+       (*val)&= 0xff; // 8 bit port
+       nv= *val;
++      /* port_value is a read-only mirror of pins & latch.  cl_hw::init()
++	 registers every cfg cell with this hw (register_hw), so cfg->write()
++	 notifies the port itself and re-enters this hook; that second pass
++	 runs to inform_partners() as well, i.e. one latch write emits two
++	 EV_PORT_CHANGED events and clocks every counter subscriber twice per
++	 edge.  Update the mirror silently, exactly like init() does. */
+       if ((port_pins & nv) != cfg->get(port_value))
+-	cfg->write(port_value, port_pins & nv);
++	cfg->set(port_value, port_pins & nv);
+     }
+   
+   if (bas->is_owned(cell, &ba))
+@@ -175,7 +181,7 @@
+       else
+ 	nv&= ~m;
+       if ((port_pins & nv) != cfg->get(port_value))
+-	cfg->write(port_value, port_pins & nv);
++	cfg->set(port_value, port_pins & nv);  // mirror, not a device write
+     }
+ 
+   conf(cell, val);
+@@ -244,7 +250,7 @@
+   if (ep.pins != ep.new_pins)
+     inform_partners(EV_PORT_CHANGED, &ep);
+   if ((port_pins & ep.prev_value) != cfg->get(port_value))
+-    cfg->write(port_value, port_pins & ep.prev_value);
++    cfg->set(port_value, port_pins & ep.prev_value);  // mirror, not a device write
+ }
+ 
+ bool

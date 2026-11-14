@@ -1,0 +1,13 @@
+#!/bin/sh
+# s51 -- AT89C51RD2 simulator front end (ucsim 0.8.15, 89C51R device model).
+#
+# Passes -t 89C51R by default. Everything else is a plain ucsim/s51 command line:
+#   s51 firmware.hex                     interactive
+#   s51 -e "break 0x12" -G firmware.hex  run to a breakpoint
+#   echo 'file "f.hex"; run; info reg' | s51 -c -
+#   s51 -X 11.0592M -S if=memory firmware.hex
+set -e
+ROOT="${S51_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
+BIN="$ROOT/vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51"
+[ -x "$BIN" ] || { echo "s51: not built; run $ROOT/build.sh" >&2; exit 3; }
+exec "$BIN" -t 89C51R "$@"

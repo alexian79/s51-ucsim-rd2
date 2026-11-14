@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.o
+*.dep
+Makefile.dep
+xval/target/
+/vendor/
+/install/

@@ -1,0 +1,23 @@
+$ /tmp/ucsim_51-prefix -q -t C52
+set memory sfr 0xc8 0x06
+set memory sfr 0xcc 0x00
+set memory sfr 0xcd 0x00
+tick 5
+dump sfr 0xcc 0xcd
+quit
+
+uCsim, Copyright (C) 1997 Daniel Drotos.
+uCsim comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+This is free software, and you are welcome to redistribute it
+under certain conditions; type `show c' for details.
+set memory sfr 0xc8 0x06
+set memory sfr 0xcc 0x00
+set memory sfr 0xcd 0x00
+tick 5
+dump sfr 0xcc 0xc0xc8 T2CON:               0b00000110 0x06 '.'   6
+0xcc TL2:                 0b00000000 0x00 '.'   0
+0xcd TH2:                 0b00000000 0x00 '.'   0
+d
+quit
+0xcc TL2:                 0b00000101 0x05 '.'   5
+0xcd TH2:                 0b00000000 0x00 '.'   0

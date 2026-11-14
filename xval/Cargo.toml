@@ -1,0 +1,10 @@
+[package]
+name = "xval"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mcs51-asm = { path = "../vendor/mcs51-rs/crates/mcs51-asm" }
+mcs51-ld  = { path = "../vendor/mcs51-rs/crates/mcs51-ld" }
+mcs51-ihex = { path = "../vendor/mcs51-rs/crates/mcs51-ihex" }
+mcs51-sim = { path = "../vendor/mcs51-rs/crates/mcs51-sim" }

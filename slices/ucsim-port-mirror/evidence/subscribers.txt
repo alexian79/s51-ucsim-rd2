@@ -1,0 +1,9 @@
+interrupt.cc:170:      he == EV_PORT_CHANGED &&
+pca.cc:368:      he == EV_PORT_CHANGED &&
+port.cc:168:	 EV_PORT_CHANGED events and clocks every counter subscriber twice per
+port.cc:195:    inform_partners(EV_PORT_CHANGED, &ep);
+port.cc:251:    inform_partners(EV_PORT_CHANGED, &ep);
+rd2_kbd.cc:142: * here rather than from an EV_PORT_CHANGED partner (the route SIMULATION-PLAN.md
+rd2_spi.cc:194: * EV_PORT_CHANGED either, so SPI traffic on P1.6/P1.7 cannot trigger a PCA capture
+timer0.cc:398:      he == EV_PORT_CHANGED &&
+timer2.cc:399:      he == EV_PORT_CHANGED &&
