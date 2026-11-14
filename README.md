@@ -668,7 +668,7 @@ instruction; `xval` prints the same tuples from the other core, so the two are d
     ucsim-periph-pattern.md    how to add a peripheral to this codebase, learned from the four
     t/                         floor of 26 counted suites plus runtests (reported, never
                                counted) + the Ghidra-side suites, images, the real sdcc
-                               fixtures in t/map/, mkhex.py, uctrace.py, xcompare.py,
+                               fixtures in t/map/, mkhex.py, simproc.py, uctrace.py, xcompare.py,
                                runtests.py, and the notes beside each suite
     gh/                        GhidraScripts and the hex fixtures they read (duplicated in the
                                language repo so each repo runs alone)

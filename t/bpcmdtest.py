@@ -30,8 +30,11 @@ into the checks:
 import os
 import re
 import shlex
-import subprocess
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from simproc import run_pipe
 
 S51 = os.environ.get("S51") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SIM = os.environ.get("S51_SIM") or os.path.join(
@@ -59,12 +62,10 @@ def run(cmds, timeout=25):
     quoted = " ".join(shlex.quote(c) for c in cmds)
     pipe = '( printf "%%s\\n" %s; sleep 1 ) | %s -t 89C51R -q -c -' % (
         quoted, shlex.quote(SIM))
-    try:
-        p = subprocess.run(["sh", "-c", pipe], capture_output=True, text=True,
-                           timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return "<<timeout>>"
-    return p.stdout + p.stderr
+    # run_pipe, not subprocess.run: a timeout has to kill the simulator `sh'
+    # spawned, not only `sh' -- see t/simproc.py.
+    res = run_pipe(["sh", "-c", pipe], timeout)
+    return "<<timeout>>" if res.killed else res.out
 
 
 def bp_rows(out, addr=None):

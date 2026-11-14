@@ -1303,6 +1303,20 @@ Standard, `Fosc` in X2); reading `FPER` as `Fosc/12` misses by 6× and 12×.
   `langtest`/`rmwtest`, which start a headless Ghidra and must run one at a time, and `xcompare`,
   which starts no Ghidra but writes a fixed `/tmp/xval.ihx`.
 
+- **A console pipeline's timeout has to kill the process group, not the shell.** Every suite that has
+  to survive `run` freezing the console feeds it through `( printf … ; sleep 1 ) | ucsim_51 -c -`,
+  which puts the simulator in the **child** of `sh`. `subprocess.run(timeout=…)` kills the shell and
+  leaves the simulator reparented to init. It cannot be reaped by closing its stdin either: EOF only
+  reaches a console that is *waiting for a command* (verified — `pc` then EOF exits 0 in 0.02 s), while
+  a core sitting in `run` never polls stdin at all, so a sled jumps to itself forever at 100 % CPU
+  (verified — `run` then EOF was still burning when `timeout -s KILL` took it at 5 s). `wptrtest`'s
+  control leg is exactly this session by design — a watchpoint that never fires leaves the sled
+  running, and "killed" *is* the leg's evidence — so **every floor run stranded one spinning core**,
+  and 33 of them were still burning when the machine was finally checked. `t/simproc.py:run_pipe`
+  starts the shell in its own session and SIGKILLs the whole group; new console pipelines go through it
+  and never through `subprocess.run`. After any floor, `ps -eo pid,ppid,args | awk '$2==1 && /ucsim/'`
+  must print nothing.
+
 - **A suite that has been red for a long time is usually a stale expectation, not a broken model —
   but only after the model has been re-read against the primary source.** `irctest` sat at 48/50 for
   three cutovers. Its two failing legs asserted the *pre-RD2* polling order, in which the keyboard

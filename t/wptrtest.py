@@ -94,6 +94,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mkhex import write_hex
+from simproc import run_pipe
 
 SIM = os.environ.get("S51_SIM") or os.environ.get("S51") or os.path.expanduser(
     "~/s51/vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
@@ -164,13 +165,11 @@ def run_session(pre_run, hold_s):
     head = '\n'.join(['file "%s"' % TMP] + pre_run + ["run"])
     shell = ("( printf '%s\\n'; sleep %g; printf '\\npc\\nexit\\n'; sleep 1 ) | "
              "%s -t %s -c -" % (head, hold_s, SIM, DEV))
-    try:
-        p = subprocess.run(["bash", "-c", shell], capture_output=True,
-                           text=True, timeout=hold_s + 4)
-        return p.stdout + p.stderr, p.returncode
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or b"").decode() + (e.stderr or b"").decode()
-        return out, "killed"
+    # run_pipe, not subprocess.run: this control leg times out ON PURPOSE, and the
+    # simulator its sled leaves running is bash's child -- killing bash alone
+    # reparented that simulator to init, spinning at 100 % CPU.  See t/simproc.py.
+    res = run_pipe(["bash", "-c", shell], hold_s + 4)
+    return res.out, ("killed" if res.killed else res.rc)
 
 
 def sentinel_run(path, pre, target, sent, **kw):
