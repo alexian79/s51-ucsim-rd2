@@ -9,7 +9,9 @@ import re
 import subprocess
 import sys
 
-SIM = os.path.expanduser("~/s51/vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
+ROOT = os.environ.get("S51") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SIM = os.environ.get("S51_SIM") or os.path.join(
+    ROOT, "vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
 
 
 def trace(image, n, cpu="89C51R"):

@@ -5,8 +5,8 @@ What this is
 ------------
 
 Research work on the Atmel AT89C51RD2 / AT89C51ED2 for reverse engineering: a device-model and
-peripheral build-out on top of ucsim, a 22-suite verification bed, and the analysis notes that
-record what the datasheet actually says. Copyright (C) 2026 Oleksiy <alexian79@gmail.com>.
+peripheral build-out on top of ucsim, a verification bed of 25 counted suites plus runtests
+(reported, never counted), and the analysis notes that record what the datasheet actually says.
 Distributed under GPL-2.0-or-later (see LICENSE), the same licence as ucsim, because the code here
 modifies and extends ucsim.
 
@@ -19,7 +19,8 @@ redistributed here. To reproduce the exact tree every suite in `t/` was run agai
 
     git clone https://github.com/CrispStrobe/ucsim-stc vendor/ucsim-stc
     git -C vendor/ucsim-stc checkout 441710c
-    git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
+    git -C vendor/ucsim-stc apply ../patches/rd2-vs-ucsim-stc-441710c.patch
+    # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh
 
 The patch touches **38 files**: 28 modified (+2255 / -190) and 10 added (`rd2_boot`, `rd2_brg`,
@@ -62,7 +63,11 @@ Ghidra side lives elsewhere
 The AT89C51RD2 Ghidra language is a separate repo, `ghidra-at89c51rd2` (Apache-2.0, because
 `rd2.sinc` is a derivative of Ghidra's `8051_main.sinc`), together with `langbuild`, `gh51` and
 the Ghidra scripts in `gh/`. The gated patch to Ghidra's shared include is
-`ghidra-8051-dual-dptr` (Apache-2.0). `t/langtest.py`, `t/rmwtest.py` and `t/banktest.py` are the
-Ghidra-side suites kept here for completeness of the bed; they need that language installed via
-`langbuild` first, and they are deliberately outside `t/floor.sh` because each starts a headless
-Ghidra. `gh/` is duplicated in the language repo so each repo runs on its own.
+`ghidra-8051-dual-dptr` (Apache-2.0). `t/langtest.py`, `t/rmwtest.py`, `t/banktest.py` and
+`t/symmaptest.py` are the Ghidra-side suites kept here for completeness of the bed; all four
+need that language installed via `langbuild` first. `langtest`, `rmwtest` and `symmaptest` are
+deliberately outside `t/floor.sh` because each starts a headless Ghidra; `banktest` runs inside
+the floor's counted set. `symmaptest` ships here rather than beside the language because half of
+it is the simulator: it gives one `.sym` to ucsim's `sym` command and the same bytes to
+`gh/LoadSym51.java`. `gh/` is duplicated in the language repo so each repo runs on its own,
+except `LoadSym51.java`, which lives only here for that same reason.

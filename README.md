@@ -4,15 +4,17 @@ Base for 8051 decompilation work. Built on **ucsim 0.8.15** (D. Drotos, GPL-2), 
 `CrispStrobe/ucsim-stc`, selected because it already ships a dedicated **AT89C51RD2 device
 model** (`s51.src/uc89c51r.cc`, class `cl_uc89c51r`).
 
-This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a 24-suite
-verification bed, and the analysis notes that record what the datasheet actually says. The
+This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a
+verification bed of 25 counted suites plus `runtests` (reported, never counted), and the analysis
+notes that record what the datasheet actually says. The
 AT89C51RD2 Ghidra language is the sibling repo `ghidra-at89c51rd2`; the gated patch to Ghidra's
 shared 8051 include is `ghidra-8051-dual-dptr`. GPL-2.0-or-later (`LICENSE`); the upstream commit
 this was built on, and the licensing of every piece, are in `NOTICE`.
 
     git clone https://github.com/CrispStrobe/ucsim-stc vendor/ucsim-stc
     git -C vendor/ucsim-stc checkout 441710c     # the base commit this work sits on
-    git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
+    git -C vendor/ucsim-stc apply ../patches/rd2-vs-ucsim-stc-441710c.patch
+    # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh                                   # configure + make (logs: /tmp/s51-*.log)
     ./s51 firmware.hex                           # interactive; == ucsim_51 -t 89C51R
     cd t && ./floor.sh                           # 25 suites against that binary, ~2 min
@@ -52,9 +54,10 @@ writes the selected pointer, the active pointer is marked in `info registers`, a
 toggles DPS — which works because bit 2 is stuck at 0, exactly as doc4235 §8 describes. Final
 state of `t/dptr2.hex`: `DPTR0=0x5678`, `*DPTR1=0xaaaa`.
 
-The other ways to reach AUXR1 all behave as the bit-2-stuck-at-0 rule predicts: `MOV #imm`, `INC`,
-`DEC`, `ORL`, `ANL`, `XRL` and `DJNZ` each toggle, set or clear DPS exactly as their arithmetic on
-bit 0 dictates (`t/rmwtest.py`, 10/10 against both cores of this project). Writes whose *value* is
+The other ways to reach AUXR1 all behave as the bit-2-stuck-at-0 rule predicts: `DEC`, `ORL`,
+`ANL`, `XRL` and `DJNZ` each toggle, set or clear DPS exactly as their arithmetic on bit 0
+dictates (`t/rmwtest.py`, 10/10 against both cores of this project), and `t/dpstest.py` pins the
+`MOV AUXR1,#n` immediate form. Writes whose *value* is
 only known at run time — `MOV AUXR1,A` and friends — are correctly reported as unresolvable;
 `gh/Bank51.java` asserts the bank there once an actual run has established it (`t/banktest.py`).
 
@@ -154,7 +157,7 @@ the keyboard opened. `SPSTA` writes are dropped, because all four flags are set 
 every documented clearing mechanism is a *sequence* on other registers; `MODF` is a **level**,
 re-asserted while `SS` stays low — the only reading that gives footnote 1 on printed p.64 meaning —
 so software has to free the pin or set `SSDIS`, and with `SSDIS` set no mode fault arises at all.
-`info hardware spi` prints `spi[14] …`; its counters are keyed `bytes=`, `wcol_events=`,
+`info hardware spi` prints `spi[15] …`; its counters are keyed `bytes=`, `wcol_events=`,
 `modf_events=`, `sserr_events=` precisely so they cannot be confused with the flag keys above them.
 
 Not modelled, with the reason in `rd2_spiccl.h`: the maximum slave `SCK` frequency (the datasheet
@@ -189,7 +192,8 @@ except a NOP tail, so launch cost, setup cost and the cycle in which the `CKRL` 
 cancel: `M = 2 / 14 / 510` clock costs, X2 composition (12 and 3060 clocks per cycle), no drift over
 8192 machine cycles at `M = 14`, then per-consumer clock costs for T0 (`X2|T0X2` halves while `CKRL`
 multiplies), PCA `CPS=01`, a 32-machine-cycle `T2OE` period, BRG overflow pairs and the mode-2 bit.
-16 of the 35 fail against the pre-prescaler binary.
+21 of the 35 fail against the pre-prescaler binary (measured against the control build at
+`/tmp/s51-ref-b`).
 
 On top of that net, doc4235 §7 gives two independent rules, and the second one is easy to read
 backwards:
@@ -243,9 +247,12 @@ Verified by `t/hwtest.py` (8/8):
 | transmitted byte reaches the serial output | byte | yes |
 
 Capturing TX needs **`-S out=<file>`** — `-I out=` is the memory interface, not the UART:
-`printf 'file "f.hex"\ngo\nexit\n' | s51 -S out=/tmp/tx.bin`. Serial **receive** is implemented
-(`-S in=<file>`) but only drains input when `serconf_check_often` is set, and this fork has the
-variable registration commented out in `serial.cc:88-92`, so RX cannot be driven from batch mode.
+`printf 'file "f.hex"\ngo\nexit\n' | s51 -S out=/tmp/tx.bin`. Serial **receive** works from batch
+mode too: with `-S in=<file>` a byte reaches SBUF and RI during `go`, because `run_go()` polls the
+UART terminal console every period steps (`t/uartmp.py` pins it, leg `batch_rx_byte_per_frame`,
+19/19). What batch RX cannot express is per-frame 9th/stop-bit control — the SM2 and FE rules of
+doc4235 §14.1/14.2 are defined entirely in terms of those two bits — which is what the RD2-only
+`uart0_rx9` input exists to supply.
 Timer 2 correctly does **not** set TF2 while RCLK/TCLK are active, per the 8052 rule.
 
 The RD2's own clock-source selection is honoured only partially: ucsim treats T2CON.RCLK/TCLK as
@@ -303,7 +310,7 @@ meanwhile, so a read answers `0xff` and a write is refused, both counted. The ar
 `reset()` (the only power-cycle-like event ucsim has) and deliberately has no backing file: ucsim has
 no VCC-removal event to hang load/flush on. Registered behind `rd2_is_ed2()` in
 `cl_uc89c51rd2::mk_hw_elements()`, so the plain RD2 keeps `EECON` named-and-inert as D14 pins.
-`t/eepromtest.py`, 30 legs.
+`t/eepromtest.py`, 29 legs — 30 when `S51_REF` names a control binary.
 
 **(7) Every port edge counted twice by the counters.** `cl_port::write()` and `cl_port::set_pin()`
 refreshed the read-only `port_value` cfg mirror with `cfg->write()`, and `cl_hw::init()`
@@ -509,8 +516,9 @@ remains: `read_map_file` still parses the legacy ASlink map, not modern `sdld` o
 
 **A scripted debugger** (`tools/s51dbg.py` and `t/s51dbgtest.py`, 68 legs, **green on both build
 families**): the driver owns a `-Z` session and answers in JSON verbs, asserting on stop codes and on
-`info break` re-reads rather than on what a command replied — because `delete 0x3a` prints nothing
-and changes nothing (the id from `info break` is what deletes), a breakpoint that has never run
+`info break` re-reads rather than on what a command replied — because `delete 0x3a` prints a bare
+`Error` and leaves the row (the id from `info break` is what deletes, and no reply — not even a
+bare `Error` — is evidence that the row changed), a breakpoint that has never run
 prints `Hit 1  Cnt 1`, and `Cond` reads `true` for a breakpoint with no condition at all. A load is
 proven by ROM readback against the bytes parsed out of the `.ihx` itself, with a tamper leg that must
 fail and a non-HEX input that must be refused. Where the two build families genuinely differ —
@@ -569,6 +577,12 @@ about two minutes. The binary is the **first argument**; the floor exports it as
 now reads that variable. That was not true until the SPI cutover: eleven suites hard-coded the
 vendor path, so a floor "run against another build" was silently re-testing the vendor tree for
 most of its rows — the tell was `ident89c51r` printing the vendor path inside its own `PASS` line.
+That suite carried a worse hole than a wrong path: five of its nine images were read from `~/s51/t/`
+and four from `/tmp`, it skipped any image it could not open, and it divided by the number of legs
+it had actually run — so on a machine that had never seen this work it printed `PASS: 0/0`, exited
+0 and left the floor green, and on the author's machine stale `/tmp` images let it report `36/36`
+that a fresh clone could not reproduce. It now builds every image it needs itself, fails naming the
+path and `errno` if one cannot be opened, and its denominator is fixed at images times legs.
 `S51` is exported too, as the repo root, for the suites that want a directory rather than a binary.
 The count is the number of suites that are **not** green, and `runtests` is **reported but never
 counted**: it exits non-zero by design at its upstream `11/20` baseline, so a count of 1 has never
@@ -599,9 +613,10 @@ may run alongside either of them, but never twice at once, since both write the 
     ./runtests.py                        # upstream baselines
     ./xramtest.py                        # expanded-RAM window: 10/10 boundaries
     ./hwtest.py                          # timers + UART vs datasheet: 8/8
-    ./x2test.py                          # CKCON0 X2 clock modes: 8/8
+    ./x2test.py                          # CKCON0 X2 clock modes: 15/15
     ./dpstest.py                         # dual DPTR oracle: 2/2 (A/B, bank on vs NOPed)
-    ./langtest.py                        # Ghidra language: 12/12 (builds the language itself)
+    ./langtest.py                        # Ghidra language: the workbench README's gate table
+                                         # carries the leg count (builds the language itself)
     ./rmwtest.py                         # RMW bank forms: 10/10, ucsim vs Ghidra must agree
     ./banktest.py                        # dynamic bank + Bank51 override: 3/3
 
@@ -614,8 +629,16 @@ simulator. `rmwtest.py` and `banktest.py` drive `analyzeHeadless`, so each takes
 minute; they need `~/s51/langbuild` to have been run.
 
 `langtest.py`, `rmwtest.py` and `banktest.py` also ship inside `ghidra-at89c51rd2`, where the
-language they gate lives. All three take their root from `$S51` or from their own location, so
-either copy runs; `$S51_SIM` aims the simulator legs at any build.
+language they gate lives; `$S51_SIM` aims the simulator legs at any build. But the `langtest.py`
+shipped here cannot run as-is: it executes `$S51/langbuild` (`t/langtest.py:46`), which lives in
+the language repo and not in this one — point `S51` at the `ghidra-at89c51rd2` checkout, or run
+the copy that ships beside `langbuild`.
+
+`symmaptest.py` is the fourth Ghidra gate and it ships **here**, not in the language repo,
+because half of it is the simulator: it gives one `.sym` to ucsim's `sym` command and the same
+bytes to `gh/LoadSym51.java` inside Ghidra, then fails on any name the two tools put in
+different memories. `bring-up.sh` runs it with `S51` aimed at this checkout, so the copies it
+executes are the ones in this repo.
 
 `uctrace.py` prints `T <pc> <machine_cycles> <acc> <psw>` sampled before each retired
 instruction; `xval` prints the same tuples from the other core, so the two are directly diffable.
@@ -627,8 +650,9 @@ instruction; `xval` prints the same tuples from the other core, so the two are d
                                verification rules -- the long form of everything below
     doc4235-spec.md            what the datasheet says, section + PRINTED page for each answer
     ucsim-periph-pattern.md    how to add a peripheral to this codebase, learned from the four
-    t/                         24-suite floor (floor.sh) + the Ghidra-side suites, images,
-                               mkhex.py, uctrace.py, xcompare.py, runtests.py
+    t/                         floor of 25 counted suites plus runtests (reported, never
+                               counted) + the Ghidra-side suites, images, mkhex.py,
+                               uctrace.py, xcompare.py, runtests.py
     gh/                        GhidraScripts and the hex fixtures they read (duplicated in the
                                language repo so each repo runs alone)
     xval/                      my Rust driver for the independent i8051 core; needs

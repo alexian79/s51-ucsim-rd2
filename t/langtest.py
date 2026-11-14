@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Acceptance test for the AT89C51RD2 Ghidra language.
 
-Three checks, all on gh/blkmove.hex and t/isa.ihx:
+Checks on gh/blkmove.hex, gh/auxr.hex and t/isa.ihx; the summary denominator is counted as the
+checks run, never written down:
 
 1. dual DPTR resolved. The doc4235 sec 8 block move sets DPTR1=0x1000 and DPTR0=0x2000 and
    increments both every iteration. The pcode must therefore write DPTR1 and DPTR0 separately and
@@ -49,6 +50,7 @@ def main():
     blk = os.path.join(S51, "gh", "blkmove.hex")
     isa = os.path.join(S51, "t", "isa.ihx")
     bad = 0
+    done = 0
 
     pc = headless("pc", blk, RD2, "Pcode51.java")
     want = [
@@ -60,11 +62,13 @@ def main():
     print("dual DPTR pcode, %s:" % RD2)
     for pat, label in want:
         ok = re.search(pat, pc) is not None
+        done += 1
         bad += 0 if ok else 1
         print("  %s %-45s %s" % ("PASS" if ok else "FAIL", label, pat))
 
     stock = headless("st", blk, STOCK, "Pcode51.java")
     collapsed = len(re.findall(r"->DPTR:", stock)) >= 2 and "DPTR1" not in stock
+    done += 1
     bad += 0 if collapsed else 1
     print("  %s %-45s %d DPTR writes, DPTR1 present=%s"
           % ("PASS" if collapsed else "FAIL", "stock language still collapses both pointers",
@@ -79,6 +83,7 @@ def main():
 
     ma, mb = mnems(a), mnems(b)
     same = ma == mb and len(ma) > 0
+    done += 1
     bad += 0 if same else 1
     print("ISA decode: %s %d instructions, identical=%s" %
           ("PASS" if same else "FAIL", len(mb), ma == mb))
@@ -93,6 +98,7 @@ def main():
     blocks = dict(re.findall(r"PROBE EXTMEM:([0-9a-f]+) block=(\S+)", bx))
     expect_blocks = {"0100": "XRAM", "06ff": "XRAM", "0700": "XDATA", "1234": "XDATA"}
     ok = blocks == expect_blocks
+    done += 1
     bad += 0 if ok else 1
     print("XRAM map:   %s boundary at 0x700, got %s" %
           ("PASS" if ok else "FAIL", blocks or "nothing mapped"))
@@ -103,9 +109,11 @@ def main():
                  re.findall(r"MOV 0x8e,#0x([0-9a-f]+)\s+\[[^]]*?(\d+) bytes\)", ax))
     want_sizes = {"0": 256, "8": 768, "c": 1024, "10": 1792}
     ok = all(sizes.get(k) == v for k, v in want_sizes.items())
+    done += 1
     bad += 0 if ok else 1
     print("XRAM window:%s XRS -> %s" % ("PASS" if ok else "FAIL", sizes))
     extram = "EXTRAM=1" in ax and "dynamic window" in ax
+    done += 1
     bad += 0 if extram else 1
     print("  %s %-45s" % ("PASS" if extram else "FAIL",
                           "EXTRAM=1 and non-constant AUXR both reported"))
@@ -113,6 +121,7 @@ def main():
     # RMW forms on AUXR1: five resolvable, only MOV AUXR1,A genuinely dynamic
     m = re.search(r"HAZARD AUXR1.*sites=(\d+) modelled=(\d+) unmodelled=(\d+)", ax)
     ok = m is not None and (m.group(1), m.group(2), m.group(3)) == ("6", "5", "1")
+    done += 1
     bad += 0 if ok else 1
     print("RMW bank:   %s %s" % ("PASS" if ok else "FAIL",
                                  m.group(0).split("@")[0].strip() if m else "no AUXR1 report"))
@@ -135,12 +144,14 @@ def main():
     # D5: Table 3-8 puts the SPI registers at C3/C4/C5, so C1/C2 must be bare
     want_spi = {"SFR:c3": "SPCON", "SFR:c4": "SPSTA", "SFR:c5": "SPDAT"}
     ok = all(want in at(a) for a, want in want_spi.items())
+    done += 1
     bad += 0 if ok else 1
     print("SPI map:    %s Table 3-8 -> %s"
           % ("PASS" if ok else "FAIL", {a: at(a) for a in want_spi}))
 
     bare = {a: at(a) for a in ("SFR:c1", "SFR:c2", "SFR:df")}
     ok = all(v == [] for v in bare.values()) and "PCON1" not in set(sum(syms.values(), []))
+    done += 1
     bad += 0 if ok else 1
     print("  %s %-45s %s" % ("PASS" if ok else "FAIL",
                              "C1/C2 unmapped, no symbol at DF (PCON1 gone)", bare))
@@ -148,17 +159,20 @@ def main():
     # row D0 of Table 3-11: PSW@D0, FCON@D1, EECON@D2 (Table 3-10), DFh unused
     row = {a: at("SFR:" + a) for a in ("d0", "d1", "d2")}
     ok = row == {"d0": ["PSW"], "d1": ["FCON"], "d2": ["EECON"]}
+    done += 1
     bad += 0 if ok else 1
     print("D0 row:     %s %s" % ("PASS" if ok else "FAIL", row))
 
     # Table 3-3 says IEN0/IEN1, p4 says IE0/IE1, toolchain headers say IE/IE1; all resolve at one
     ie = {"SFR:a8": ["IE", "IEN0", "IE0"], "SFR:b1": ["IEN1", "IE1"]}
     ok = all(all(n in at(a) for n in ns) for a, ns in ie.items())
+    done += 1
     bad += 0 if ok else 1
     print("IE aliases: %s %s" % ("PASS" if ok else "FAIL", {a: at(a) for a in ie}))
 
     # the alias must not steal the TCON flag names (Table 3-5: IE1/IT1/IE0/IT0 at bits 8B/8A/89/88)
     ok = "IE0" in at("BITS:89") and "IE1" in at("BITS:8b")
+    done += 1
     bad += 0 if ok else 1
     print("  %s %-45s %s %s" % ("PASS" if ok else "FAIL",
                                 "TCON bit names IE0/IE1 still resolve", at("BITS:89"), at("BITS:8b")))
@@ -168,6 +182,7 @@ def main():
              "BITS:e8": "P5.0", "BITS:ef": "P5.7"}
     phantom = sorted(n for n in set(sum(syms.values(), [])) if "IFLG" in n)
     ok = all(want in at(a) for a, want in ports.items()) and not phantom
+    done += 1
     bad += 0 if ok else 1
     print("P4/P5 bits: %s %s phantom=%s"
           % ("PASS" if ok else "FAIL", {a: at(a) for a in ports}, phantom or "none"))
@@ -177,6 +192,7 @@ def main():
     # own primary symbol even though the two share a name.
     p5 = {"SFR:e8": ["P5"], "SFR:c7": ["P5"]}
     ok = all(at(a) == n for a, n in p5.items()) and all(prim(a) == n for a, n in p5.items())
+    done += 1
     bad += 0 if ok else 1
     print("P5 byte:    %s E8/C7 both named: %s primary=%s"
           % ("PASS" if ok else "FAIL", {a: at(a) for a in p5}, {a: prim(a) for a in p5}))
@@ -184,11 +200,12 @@ def main():
     # B8 carries the header name IP (primary, as every 8052 toolchain spells it) plus the
     # datasheet's IPL0 (Table 3-3, p4) as a non-primary alias
     ok = at("SFR:b8") == ["IP", "IPL0"] and prim("SFR:b8") == ["IP"]
+    done += 1
     bad += 0 if ok else 1
     print("IPL0 alias: %s SFR:b8 all=%s primary=%s" % ("PASS" if ok else "FAIL",
                                                        at("SFR:b8"), prim("SFR:b8")))
 
-    total = 22
+    total = done              # counted at run time; a hardcoded denominator overstated coverage
     print("\n%s: %d/%d checks" % ("PASS" if not bad else "FAIL", total - bad, total))
     return 1 if bad else 0
 

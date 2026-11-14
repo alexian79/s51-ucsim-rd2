@@ -10,13 +10,18 @@ import re
 import subprocess
 import sys
 
-SRC = os.path.expanduser("~/s51/vendor/ucsim-stc/ucsim/src")
-SIM = os.path.join(SRC, "sims/s51.src/ucsim_51")
+ROOT = os.environ.get("S51") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(ROOT, "vendor/ucsim-stc/ucsim/src")
+SIM = os.environ.get("S51_SIM") or os.path.join(SRC, "sims/s51.src/ucsim_51")
 TESTDIR = os.path.join(SRC, "sims/s51.src/test")
 
 import shlex
+testlib = os.path.join(SRC, "test-lib.mk")
+if not os.path.exists(testlib):
+    sys.exit("no test-lib.mk at %s (set $S51 to the repo root or $S51_SIM to the "
+             "simulator under test)" % testlib)
 elide = []
-for ln in open(os.path.join(SRC, "test-lib.mk")):
+for ln in open(testlib):
     m = re.match(r"\s*ELIDE\s*\+=\s(.*)$", ln)
     if m:
         elide += shlex.split(m.group(1))
