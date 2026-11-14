@@ -22,12 +22,17 @@ redistributed here. To reproduce the exact tree every suite in `t/` was run agai
     git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
     ./build.sh
 
-The patch touches 34 files: 24 modified (+1472 / -175) and 10 added (`rd2_boot`, `rd2_brg`,
-`rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`). It was verified by applying it to a fresh
-clone of that commit and comparing trees: `diff -rq` (build artefacts excluded) reports no
-content differences at all. `slices/` holds the two changes cut as self-contained, upstream-sized
-pieces -- the timer-2 `cycles` bug and the port-mirror double-notify -- each with its own patch,
-text and evidence.
+The patch touches **38 files**: 28 modified (+2255 / -190) and 10 added (`rd2_boot`, `rd2_brg`,
+`rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`, 2483 lines). Four files the working tree also
+changes are deliberately left out — `ucsim/src/common.mk`, `ucsim/src/packages.mk`,
+`ucsim/src/core/utils.src/ddconfig.h`, `ucsim/docs/Makefile` — because they are `./configure` output
+and the copies in the base tree record one machine (curses and flex detected off, an install prefix
+pointed at the author's home). `build.sh` runs `configure` after the patch, so every reader gets
+their own values. It was verified by applying the patch to a fresh clone of that commit and
+comparing trees: file-by-file comparison of all 38 patched paths reports no content difference at
+all, and the only other differences under `ucsim/src` are build artefacts. `slices/` holds the two
+changes cut as self-contained, upstream-sized pieces -- the timer-2 `cycles` bug and the
+port-mirror double-notify -- each with its own patch, text and evidence.
 
 Attribution note: the 10 new files carry `Copyright (C) 2026 Oleksiy`. The fork's own new files
 (`stc12_*.cc`) carry `Copyright (C) 2026 CrispStrobe`; that header convention was copied, the

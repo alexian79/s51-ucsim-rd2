@@ -15,7 +15,7 @@ this was built on, and the licensing of every piece, are in `NOTICE`.
     git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
     ./build.sh                                   # configure + make (logs: /tmp/s51-*.log)
     ./s51 firmware.hex                           # interactive; == ucsim_51 -t 89C51R
-    cd t && ./floor.sh                           # 24 suites against that binary, ~70 s
+    cd t && ./floor.sh                           # 25 suites against that binary, ~2 min
 
 The 161 MB GPL base tree is not redistributed here. `patches/rd2-vs-ucsim-stc-441710c.patch` is
 verified against a fresh clone of that commit: applied there, `diff -rq` against the tree every
@@ -358,6 +358,20 @@ remote server port — is back in `--help`: `app.cc` had its option text and the
 commented out while `main()` still parsed it and assigned `rgdb_port`, so a working debugger feature
 was invisible.
 
+**(11) A name from the assembler meant nothing to the simulator.** A loaded program gave you
+addresses only — `break 0x3a`, `if "iram[0x40]==0x5a"` — even though the variable machinery already
+had everything needed for better: `cl_var_list` indexes bindings by name *and* by address, every
+binding records who created it, and the command lexer resolves any identifier to a `(memory,
+address)` cell. Nothing could fill it from a build. `sym "prog.sym"` now reads the `asxx`/`sdas`
+symbol list, and `file "prog"` picks up `prog.sym` beside the image the way `.cdb` and `.map`
+already were. Bindings are stamped `VBY_DEBUG`, so a device, a user `var` or an analyzer binding
+always wins — a `.sym` row states only what the assembler called something, and `info variables`
+and `expression` print those names, which `t/ident89c51r.py` pins byte-for-byte. A symbol with no
+byte cell (a bit symbol) is refused rather than parked somewhere plausible, and a malformed line
+names the file and line and loads nothing after it. Area-to-memory mapping is
+`cl_51core::sym_memory`, a virtual, so another family can answer differently. After it, `break
+_load_acc` stops at the same instruction the listing calls `_load_acc`.
+
 **One upstream defect this fork does not carry, and how to un-break 0.9.x.** Upstream HEAD as of
 `19d932c3` SIGSEGVs during startup on every device that builds a PCA — `-t 89C51R` and `-t 251`
 exit 139 before the first prompt — while `-t 51` and `-t 51R` start normally, so the natural
@@ -398,15 +412,22 @@ The change is gated on `type->type & CPU_89C51R` because **`cl_uc251` derives fr
 the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing uninitialised-DPTR
 and banner artifacts.
 
-Items (1)-(10) are the whole delta from the vendored commit: `git -C
-vendor/ucsim-stc diff --stat` reports **30 tracked files, 1635 insertions, 200 deletions**, and that
-count *excludes* the 10 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`,
-`rd2_eeprom` and their headers, 2483 lines). `patches/rd2-vs-ucsim-stc-441710c.patch` carries all 40
-and is verified by applying it to a clean clone of `441710c`: zero content differences against the
-tree every suite here was run against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch`
-is the **X2-era snapshot only** (2026-10-11, 428 lines across 10 files); it still applies with
-`git apply --check` on a clean worktree of that commit, but it is not the current delta and must not
-be quoted as such.
+Items (1)-(11) are the whole delta from the vendored commit: `git -C vendor/ucsim-stc diff --stat`,
+with the four configure-generated files below excluded, reports **28 tracked files, 2255 insertions,
+190 deletions**; that count *excludes* the 10 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`,
+`rd2_boot`, `rd2_eeprom` and their headers, 2483 lines).
+`patches/rd2-vs-ucsim-stc-441710c.patch` carries all **38** and is verified by applying it to a
+clean clone of `441710c`: zero content differences against the tree every suite here was run
+against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch` is the **X2-era
+snapshot only** (2026-10-11, 428 lines across 10 files); it still applies with `git apply --check`
+on a clean worktree of that commit, but it is not the current delta and must not be quoted as such.
+
+Four files are deliberately **not** in the patch: `ucsim/src/common.mk`, `ucsim/src/packages.mk`,
+`ucsim/src/core/utils.src/ddconfig.h` and `ucsim/docs/Makefile`. In the working tree they are
+`./configure` output, and mine record *my* machine — `CURSES_LIBS` emptied, `HAVE_CURSES_H` and
+`HAVE_FLEX` undefined, `prefix = /home/oleksiy/s51/install`. `build.sh` runs `configure` after
+applying the patch, so a reader gets their own values; shipping mine would have switched curses off
+on a machine that has it.
 
 ## Verification
 
@@ -475,6 +496,30 @@ WP-K13/K14/K15 pin the fetch-breakpoint rule and classify the binary from behavi
 fired, `(109)` a step merely landed there, `(112)` an event break; `Stop at <addr>` is printed in
 every one of those cases.
 
+**Names from a real build** (`t/symtest.py`, 14 legs): a `.sym` loads by command and as a sibling of
+`file "prog"`; `break _load_acc` then stops exactly once with `(104)` at `0x3a`, and a **control
+leg** runs the same command with no symbols loaded and requires that nothing is created — an armed
+breakpoint that fires only means something if it cannot fire by accident. `expression _counter`
+equals `expression iram[0x30]`; a fixture that claims `ACC` lives at `iram[0x30]` cannot move `ACC`,
+which still reads `sfr[0xe0][7:0]`, while `_counter` reads the cell the file named; a malformed line
+reports its own line number and binds nothing after it. The fixtures are hand-written to `asxx`
+`lstsym()` output — both the `-w` one-per-line shape and the three-per-line `|` shape — because
+`sdas8051` is not installed here, and `t/symtest-notes.md` says so plainly along with the gap that
+remains: `read_map_file` still parses the legacy ASlink map, not modern `sdld` output.
+
+**A scripted debugger** (`tools/s51dbg.py` and `t/s51dbgtest.py`, 68 legs, **green on both build
+families**): the driver owns a `-Z` session and answers in JSON verbs, asserting on stop codes and on
+`info break` re-reads rather than on what a command replied — because `delete 0x3a` prints nothing
+and changes nothing (the id from `info break` is what deletes), a breakpoint that has never run
+prints `Hit 1  Cnt 1`, and `Cond` reads `true` for a breakpoint with no condition at all. A load is
+proven by ROM readback against the bytes parsed out of the `.ihx` itself, with a tamper leg that must
+fail and a non-HEX input that must be refused. Where the two build families genuinely differ —
+fetch-breakpoint stepping, the malformed-condition refusals, the `hit N` keyword — the suite probes
+the binary once and asserts the rule-appropriate outcome, so one file is green on either. Eight legs
+pin the console itself: a load is reported over a pipe as readily as over a pty and with `-c -`
+dropped, so only `-q` and the `-Z` telnet console suppress it — and a byte total is never the
+evidence, because both report lines echo the path that was typed.
+
 **Upstream testsuite** (`t/runtests.py`, replicates `src/test-lib.mk` and its ELIDE rules):
 11/20 baselines byte-identical. The failures are not model defects:
 
@@ -519,8 +564,8 @@ Manual that doc4235 defers to — doc4235 itself contains no flag semantics):
 overflow expression. **ucsim is the only one of the three matching the Atmel documentation on
 both cases.**
 
-**Running everything** — `t/floor.sh [binary]` runs the 24 simulation suites against one binary in
-about 70 s. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
+**Running everything** — `t/floor.sh [binary]` runs the 25 simulation suites against one binary in
+about two minutes. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
 now reads that variable. That was not true until the SPI cutover: eleven suites hard-coded the
 vendor path, so a floor "run against another build" was silently re-testing the vendor tree for
 most of its rows — the tell was `ident89c51r` printing the vendor path inside its own `PASS` line.
@@ -543,7 +588,7 @@ may run alongside either of them, but never twice at once, since both write the 
 
 ## Reproducing
 
-    ./floor.sh                        # 24 suites vs one binary, ~70 s; $1 = binary to test
+    ./floor.sh                        # 25 suites vs one binary, ~2 min; $1 = binary to test
     ~/s51/build.sh                    # (the lines below assume the tree is at ~/s51)
     cd ~/s51/t
     ./uctrace.py tC.hex 4                # manual's worked example -> 6d 85

@@ -1,0 +1,11 @@
+ASxxxx Assembler V01.80 + NoICE + SDCC mods  (Intel 8051), page 1.
+
+Symbol Table
+
+  B _before_bad                                                    0041 GR
+   this line is not a symbol table record at all
+  B _after_bad                                                     0042 GR
+
+Area Table
+
+  B DSEG                                                           size   30   flags    0
