@@ -1,0 +1,219 @@
+ASxxxx Linker V05.50.4-SDLD,  page 1.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+CABS                   00000000    00000000 =           0. bytes (ABS,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000000  l_BIT_BAN |    00000000  l_CABS    |    00000000  l_GSINIT 
+     00000000  l_GSINIT1 |    00000000  l_GSINIT5 |    00000000  l_IABS   
+     00000000  l_ISEG    |    00000000  l_OSEG    |    00000000  l_PSEG   
+     00000000  l_REG_BAN |    00000000  l_REG_BAN |    00000000  l_REG_BAN
+     00000000  l_RSEG    |    00000000  l_RSEG0   |    00000000  l_RSEG1  
+     00000000  l_XABS    |    00000000  l__CODE   |    00000000  s_BSEG   
+     00000000  s_CABS    |    00000000  s_DSEG    |    00000000  s_HOME   
+     00000000  s_IABS    |    00000000  s_PSEG    |    00000000  s_REG_BAN
+     00000000  s_RSEG    |    00000000  s_RSEG0   |    00000000  s_RSEG1  
+     00000000  s_XABS    |    00000001  l_BSEG    |    00000001  l_BSEG_BY
+     00000001  s_XSEG    |    00000002  l_XINIT   |    00000002  l_XISEG  
+     00000003  l_GSFINAL |    00000003  l_GSINIT0 |    00000003  l_XSEG   
+     00000004  l_CONST   |    00000004  s_XISEG   |    00000008  l_REG_BAN
+     00000008  s_REG_BAN |    0000000A  l_GSINIT2 |    00000010  s_REG_BAN
+     00000018  s_BIT_BAN |    00000018  s_ISEG    |    00000018  s_OSEG   
+     00000018  s_REG_BAN |    00000020  s_BSEG_BY |    00000020  s__CODE  
+     00000021  s_SSEG    |    00000022  l_GSINIT3 |    0000002A  l_GSINIT4
+     0000002F  l_CSEG    |    0000004E  l_HOME    |    0000004E  s_GSINIT0
+     00000051  s_GSINIT1 |    00000051  s_GSINIT2 |    0000005B  s_GSINIT3
+     00000069  l_DSEG    |    0000007D  s_GSINIT4 |    000000A7  s_GSFINAL
+     000000A7  s_GSINIT  |    000000A7  s_GSINIT5 |    000000AA  s_CSEG   
+     000000D9  s_CONST   |    000000DD  s_XINIT   |    000000DF  l_SSEG   
+     00000100  l_IRAM   
+ASxxxx Linker V05.50.4-SDLD,  page 2.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+.  .ABS.               00000000    00000000 =           0. bytes (ABS,CON)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000000  .__.ABS.  |    000000A0  __XPAGE  
+ASxxxx Linker V05.50.4-SDLD,  page 3.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+BSEG_BYTES             00000020    00000001 =           1. bytes (REL,CON)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+ASxxxx Linker V05.50.4-SDLD,  page 4.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+REG_BANK_0             00000000    00000008 =           8. bytes (REL,OVR)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+ASxxxx Linker V05.50.4-SDLD,  page 5.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+DSEG                   00000000    00000069 =         105. bytes (REL,CON)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000008  _counter 
+ASxxxx Linker V05.50.4-SDLD,  page 6.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+SSEG                   00000021    000000DF =         223. bytes (REL,OVR)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000021  __start__
+ASxxxx Linker V05.50.4-SDLD,  page 7.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+XSEG                   00000001    00000003 =           3. bytes (REL,CON,XDATA)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000001  _xvar    
+ASxxxx Linker V05.50.4-SDLD,  page 8.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+XISEG                  00000004    00000002 =           2. bytes (REL,CON,XDATA)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000004  _xinit   
+ASxxxx Linker V05.50.4-SDLD,  page 9.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+HOME                   00000000    0000004E =          78. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     00000008  sdcc_atom |    0000002F  sdcc_atom |    0000002F  sdcc_atom
+     0000003F  sdcc_atom |    00000049  __sdcc_pr
+ASxxxx Linker V05.50.4-SDLD,  page 10.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+GSINIT0                0000004E    00000003 =           3. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     0000004E  __sdcc_gs
+ASxxxx Linker V05.50.4-SDLD,  page 11.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+GSINIT2                00000051    0000000A =          10. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+ASxxxx Linker V05.50.4-SDLD,  page 12.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+GSINIT3                0000005B    00000022 =          34. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     0000005B  __mcs51_g
+ASxxxx Linker V05.50.4-SDLD,  page 13.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+GSINIT4                0000007D    0000002A =          42. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     0000007D  __mcs51_g |    00000083  __mcs51_g
+ASxxxx Linker V05.50.4-SDLD,  page 14.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+GSFINAL                000000A7    00000003 =           3. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+ASxxxx Linker V05.50.4-SDLD,  page 15.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+CSEG                   000000AA    0000002F =          47. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     000000AA  _code_nea |    000000D0  _main     |    000000D5  ___sdcc_e
+ASxxxx Linker V05.50.4-SDLD,  page 16.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+CONST                  000000D9    00000004 =           4. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+     000000D9  _table   
+ASxxxx Linker V05.50.4-SDLD,  page 17.
+Hexadecimal  [32-Bits]
+
+Area                       Addr        Size        Decimal Bytes (Attributes)
+--------------------       ----        ----        ------- ----- ------------
+XINIT                  000000DD    00000002 =           2. bytes (REL,CON,CODE)
+
+        Value  Global            Value  Global            Value  Global    
+        -----  ------            -----  ------            -----  ------    
+ASxxxx Linker V05.50.4-SDLD,  page 18.
+
+Files Linked                              [ module(s) ]
+
+tiny.rel                                  [  ]
+
+
+Libraries Linked                          [ object file ]
+
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/mcs51.lib
+                                          [ crtclear.rel ]
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/mcs51.lib
+                                          [ crtxinit.rel ]
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/mcs51.lib
+                                          [ crtxclear.rel ]
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/mcs51.lib
+                                          [ crtpagesfr.rel ]
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/mcs51.lib
+                                          [ crtstart.rel ]
+/tmp/sdcc-rel/sdcc-4.6.0/bin/../share/sdcc/lib/small/libsdcc.lib
+                                          [ _startup.rel ]
+
+ASxxxx Linker V05.50.4-SDLD,  page 19.
+
+User Base Address Definitions
+
+HOME = 0x0000
+XSEG = 0x0001
+BSEG = 0x0000
+
+

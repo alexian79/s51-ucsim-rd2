@@ -5,7 +5,7 @@ What this is
 ------------
 
 Research work on the Atmel AT89C51RD2 / AT89C51ED2 for reverse engineering: a device-model and
-peripheral build-out on top of ucsim, a verification bed of 25 counted suites plus runtests
+peripheral build-out on top of ucsim, a verification bed of 26 counted suites plus runtests
 (reported, never counted), and the analysis notes that record what the datasheet actually says.
 Distributed under GPL-2.0-or-later (see LICENSE), the same licence as ucsim, because the code here
 modifies and extends ucsim.
@@ -23,8 +23,9 @@ redistributed here. To reproduce the exact tree every suite in `t/` was run agai
     # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh
 
-The patch touches **38 files**: 28 modified (+2255 / -190) and 10 added (`rd2_boot`, `rd2_brg`,
-`rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`, 2483 lines). Four files the working tree also
+The patch touches **38 files**: 28 modified (+2494 / -192, measured 2026-11-14) and 10 added
+(`rd2_boot`, `rd2_brg`, `rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`, 2483 lines). Four
+files the working tree also
 changes are deliberately left out — `ucsim/src/common.mk`, `ucsim/src/packages.mk`,
 `ucsim/src/core/utils.src/ddconfig.h`, `ucsim/docs/Makefile` — because they are `./configure` output
 and the copies in the base tree record one machine (curses and flex detected off, an install prefix

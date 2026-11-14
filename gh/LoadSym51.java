@@ -77,7 +77,7 @@ public class LoadSym51 extends GhidraScript {
 
     /* cl_51core::sym_memory(): areas whose value addresses data, not code */
     private static final String[] DATA_AREAS = {
-        "DSEG", "PSEG", "XSEG", "XISEG", "SSEG", "OSEG", "DATA", "INITIALIZED",
+        "DSEG", "PSEG", "XSEG", "XISEG", "ISEG", "SSEG", "OSEG", "DATA", "INITIALIZED",
         "REG_BANK", "GENOVER",
     };
 
@@ -103,6 +103,7 @@ public class LoadSym51 extends GhidraScript {
 
     private int section = SEC_NONE;
     private int lineNr = 0;
+    private int headerLeft = 0;
     private int badLine = 0;
     private String badWhy = "";
 
@@ -178,11 +179,32 @@ public class LoadSym51 extends GhidraScript {
     }
 
     private void loadLine(String rawLine) {
+        /*
+         * A `.sym' longer than one page repeats slew()'s four-line header at every page
+         * break - a form feed with the version line ending `Page N', the radix line, a
+         * timestamp, then the section title again. The version line is indistinguishable
+         * from a record whose value is the page number, so without this the loader refused
+         * everything past the first page break of any real build (t/map/tiny.sym from sdcc
+         * 4.6.0 breaks on line 61). Mirrors sym_load_line() in core/sim.src/uc.cc; the
+         * section title is deliberately not swallowed, since it re-selects the section.
+         */
+        if (headerLeft > 0) {
+            headerLeft--;                             // the radix line, then the timestamp
+            return;
+        }
+        if (rawLine.length() > 0 && rawLine.charAt(0) == '\f') {
+            headerLeft = 2;
+            return;
+        }
         String line = rawLine.trim();
         if (line.length() == 0) {
             return;
         }
         if (isBanner(line)) {
+            return;
+        }
+        if (isRadixLine(line)) {
+            headerLeft = 1;                           // the timestamp slew() prints next
             return;
         }
         if (line.equals("Symbol Table")) {
@@ -444,6 +466,18 @@ public class LoadSym51 extends GhidraScript {
             if (name.indexOf("BSEG") >= 0) {
                 return null;
             }
+            /*
+             * XSEG and XISEG name external RAM whatever the address says: sdcc links
+             * XSEG at 0x0001 by default, so the first __xdata object sits at 0x0001,
+             * where the ladder below answers INTMEM and puts the symbol in the wrong
+             * memory.  This is the rule this class's own header states and the one
+             * lkmem.c uses to size XRam; mirrors the same fix in
+             * cl_51core::sym_memory().
+             */
+            if (name.indexOf("XSEG") >= 0 || name.indexOf("XISEG") >= 0) {
+                AddressSpace ext = space(EXTMEM);
+                return (ext != null && validAddress(ext, addr)) ? EXTMEM : null;
+            }
             for (int i = 0; i < DATA_AREAS.length && !data; i++) {
                 if (name.indexOf(DATA_AREAS[i]) >= 0) {
                     data = true;
@@ -503,7 +537,15 @@ public class LoadSym51 extends GhidraScript {
     }
 
     private static boolean isBanner(String line) {
+        // the old ASxxxx shape (the `.map' banner); lstsym()'s real one starts with \f
         return line.length() > 0 && line.endsWith(".") && line.indexOf(", page ") >= 0;
+    }
+
+    /** The second line of the four-line page header slew() repeats; aslist.c picks
+     *  among these three strings by xflag. */
+    private static boolean isRadixLine(String line) {
+        return line.startsWith("Hexadecimal [") || line.startsWith("Octal [")
+                || line.startsWith("Decimal [");
     }
 
     private static boolean isValueToken(String tok) {

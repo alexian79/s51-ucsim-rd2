@@ -318,7 +318,7 @@ index f7068d6..e3c5f03 100644
  public:
    cl_sim(class cl_app *the_app);
 diff --git a/ucsim/src/core/sim.src/uc.cc b/ucsim/src/core/sim.src/uc.cc
-index fcd8641..b932cbe 100644
+index fcd8641..78c873c 100644
 --- a/ucsim/src/core/sim.src/uc.cc
 +++ b/ucsim/src/core/sim.src/uc.cc
 @@ -1147,6 +1147,8 @@ cl_uc::build_cmdset(class cl_cmdset *cmdset)
@@ -330,7 +330,212 @@ index fcd8641..b932cbe 100644
  
    cmdset->add(cmd= new cl_analyze_cmd("analyse", 0));
    cmd->add_name("analyze");
-@@ -1865,6 +1867,501 @@ cl_uc::read_map_file(cl_f *f)
+@@ -1788,20 +1790,193 @@ static bool is_addr(chars w)
+   return true;
+ }
+ 
++/*
++ * SDAS / ASlink (sdld) symbol map, wide layout: the `.map' file
++ *
++ * read_map_file() below was written against the map ASxxxx produced in the
++ * 1990s, whose symbol rows begin with a `C:' page prefix. sdld lays the same
++ * information out per area instead, so a modern map matched it in almost no
++ * line: on a real sdcc 4.6.0 link the wide map yielded `8 symbols read', all
++ * of them ROM symbols that happened to be printed with a page prefix, all
++ * bound to rom, each with the leading `_' stripped off its name; the narrow
++ * map yielded `0 symbols read'. sdcc's own link step passes `-w -m', so the
++ * wide layout is the one a user actually has.
++ *
++ * slew() in `sdas/asxxsrc/lklist.c' writes it as one block per area:
++ *
++ *   Area                       Addr        Size        Decimal Bytes (Attributes)
++ *   DSEG                       00000008    00000001 =       1. bytes (REL,CON)
++ *   -----------------------------------------------
++ *            Value  Global                             Global Defined In Module
++ *   C:   000000AA  _code_near                         tiny
++ *        00000008  _counter                           tiny
++ *
++ * The `C:' / `D:' prefix names the page and is left out when the page is 0, so
++ * the value is not always the first token. The module column is what makes the
++ * block parseable: it is non-empty exactly for globals the link resolved, and
++ * empty for the linker's own marks (`l_', `s_', `b_', `p_') and for globals it
++ * never resolved - which tells a symbol from a mark without knowing any mark
++ * name. Values are absolute, the linker having added the area base, so a row
++ * can be bound to a memory outright.
++ *
++ * Name and module are printed as "%-32.32s", so a name longer than 32
++ * characters arrives truncated and nothing here can undo that. This is still
++ * the usable layout: the narrow form packs three columns per line and
++ * truncates to 9 characters, which is why read_map_file() refuses it with a
++ * message instead of binding mangled names.
++ *
++ * Names are kept exactly as written, `_counter' included: the `.sym' loader
++ * binds the same bytes verbatim, and two loaders calling one object by two
++ * names is the failure this path exists to remove. Which memory a name lands
++ * in is sym_memory()'s decision, taken from the AREA the row was printed
++ * under - the same authority the `.sym' path uses, so the two cannot
++ * disagree. It follows that no bit name is bound here, and none could be:
++ * sdld prints no bit global in a map block at all (the `__bit flag' of the
++ * test link is in its `.sym' and in none of its maps), so the `.sym' file
++ * stays the only source of bit names.
++ */
++long
++cl_uc::read_sdld_map_file(class cl_list *lines)
++{
++  int cnt= 0;
++  int marks= 0;                 // linker marks and unresolved globals
++  int no_cell= 0;               // sym_memory refused the address
++  int kept= 0;                  // name already bound by something else
++  int clash= 0;                 // name already bound by a different address
++  chars area;
++
++  /*
++    The lines were drained once by read_map_file(), which owns the handle; see
++    the note there for why the file cannot simply be reread.
++  */
++  for (t_index ix= 0; ix < lines->count; ix++)
++    {
++      chars ln= *(chars *)lines->at(ix);
++      chars w[8];
++      int i;
++
++      ln.start_parse();
++      for (i= 0; i < 8; i++)
++        w[i]= ln.token(" \t\v");
++      if (w[3] == "=" && is_addr(w[1]) && is_addr(w[2]) &&
++          w[5] == "bytes" && w[6].c(0) == '(')
++        {                       // area row: it says what the rows below are
++          area= w[0];
++          continue;
++        }
++      i= 0;
++      if (w[0].nempty() && w[0].c(w[0].len() - 1) == ':')
++        i= 1;                   // page prefix, omitted for page 0
++      /* ".__.ABS." and friends name nothing, so a dot never becomes a symbol */
++      if (is_addr(w[i]) && w[i + 1].nempty() && w[i + 1].c(0) != '.')
++        {
++          chars name= w[i + 1];
++          chars module= w[i + 2];
++
++          if (module.empty())
++            marks++;
++          else
++            {
++              t_addr a= w[i].htoi();
++              class cl_memory *m= sym_memory(area.c_str(), a);
++
++              if (!m || !m->is_address_space() || !m->valid_address(a))
++                no_cell++;
++              else
++                {
++                  t_index vi;
++                  bool already= false;
++
++                  if (vars->by_name.search(name.c_str(), vi))
++                    {
++                      class cl_cvar *old= vars->by_name.at(vi);
++
++                      if (old)
++                        {
++                          already= true;
++                          if (old->defined_by != VBY_DEBUG)
++                            kept++;
++                          else if (old->get_addr() != a)
++                            clash++;
++                        }
++                    }
++                  if (!already)
++                    {
++                      class cl_cvar *v= vars->add(name, m, a, "");
++
++                      v->set_by(VBY_DEBUG);
++                      cnt++;
++                    }
++                }
++            }
++        }
++    }
++
++  if (marks)
++    printf("map: %d row(s) are linker marks or unresolved globals, not symbols\n",
++           marks);
++  if (no_cell)
++    printf("map: %d name(s) have no cell here; bit names are reported only by"
++           " the .sym file\n", no_cell);
++  if (kept)
++    printf("map: %d name(s) already had a binding and kept it\n", kept);
++  if (clash)
++    printf("map: %d name(s) name a second object (sdld truncates a name to 32"
++           " characters); the first binding was kept\n", clash);
++  return cnt;
++}
++
+ long
+ cl_uc::read_map_file(cl_f *f)
+ {
++  bool sdld_layout= false;              // per-area blocks: any sdld map
++  bool sdld_wide= false;                // ...as written by `sdld -w'
+   int cnt= 0;
+   chars ln;
+   chars s, w1, w2, w3, wlast, w;
+   enum { s_wait_area, s_wait_seginfo, s_wait_sym, s_wait_nsym } stat;
+   class cl_cvar *v;
+-  
+-  stat= s_wait_area;
++  class cl_list *lines;
++  t_index ix;
++
++  /*
++    Nothing in the file records which layout it holds, so the two strings that
++    only sdld's per-area layout writes are looked for before anything is
++    bound - and the whole file is held in memory while that is decided, rather
++    than scanned and rewound, because the handle arrives from mk_io(), which
++    gives cl_f a descriptor with no name in it, and cl_f::close() wipes what
++    name there was: a consumed map cannot be reopened.
++  */
++  lines= new cl_list(500, 500, "map_lines");
+   ln= f->get_s();
+   while (ln.nempty())
+     {
++      if (!sdld_layout && strstr(ln.c_str(), " bytes (") != NULL)
++        sdld_layout= true;
++      if (!sdld_wide &&
++          strstr(ln.c_str(), "Global Defined In Module") != NULL)
++        sdld_wide= true;
++      lines->add(new chars(ln));
+       ln= f->get_s();
++    }
++  if (sdld_wide)
++    {
++      cnt= read_sdld_map_file(lines);
++      lines->free_all();
++      delete lines;
++      return cnt;
++    }
++
++  stat= s_wait_area;
++  /*
++    ix starts at 1 because the `ln= f->get_s(); while (ln.nempty())' loop this
++    replaces read its first line into the condition and then overwrote it, so
++    the banner line was never parsed: only where the lines come from changed,
++    none of the rules below did.
++  */
++  for (ix= 1; ix < lines->count; ix++)
++    {
++      ln= *(chars *)lines->at(ix);
+       s= ln.c_str();
+       ln.start_parse();
+       w1= ln.token(" \t\v");
+@@ -1862,9 +2037,555 @@ cl_uc::read_map_file(cl_f *f)
+ 	  break;
+ 	}
+     }
++  if (!cnt && sdld_layout && !sdld_wide)
++    printf("map: nothing bound: sdld's 3-column map truncates names to 9\n"
++           "characters and carries no module column; link with `sdld -w' for a\n"
++           "map this loader can read\n");
++  lines->free_all();
++  delete lines;
    return cnt;
  }
  
@@ -408,6 +613,7 @@ index fcd8641..b932cbe 100644
 +  class cl_list *rows;
 +  enum sym_section section;
 +  long line_nr;
++  long header_left;         // lines of a repeated page header still to skip
 +  long bad_line;            // 0 while nothing has been refused
 +  chars bad_why;
 +  long undefined;           // `****' rows
@@ -437,7 +643,12 @@ index fcd8641..b932cbe 100644
 +}
 +
 +
-+/*! \brief Whether the line is the banner lstsym() repeats at every page.
++/*! \brief Whether the line is a header line the listing emitter repeats.
++ *
++ * The old ASxxxx shape is the one the `.map' files show: `ASxxxx Linker
++ * V05.50.4-SDLD,  page 1.'. Kept, because a file that spells its banner this
++ * way still has to load; the shape `lstsym()' really writes is the form-feed
++ * one, handled in sym_load_line().
 + *
 + * `chars' caches its length and its in-place truncators only write NULs, so
 + * every length here comes from strlen() of the (possibly truncated) buffer.
@@ -449,6 +660,19 @@ index fcd8641..b932cbe 100644
 +  if (l < 1 || line.c(l - 1) != '.')
 +    return false;
 +  return strstr(line.c_str(), ", page ") != NULL;
++}
++
++
++/*! \brief Whether the line is the radix line of a page header: the second of
++ *  the four lines `slew()' writes at every page break (`sdas/asxxsrc/aslist.c'
++ *  selects between these three strings by `xflag').
++ */
++static bool
++sym_radix_line(chars line)
++{
++  return strncmp(line.c_str(), "Hexadecimal [", 13) == 0 ||
++    strncmp(line.c_str(), "Octal [", 7) == 0 ||
++    strncmp(line.c_str(), "Decimal [", 9) == 0;
 +}
 +
 +
@@ -645,6 +869,26 @@ index fcd8641..b932cbe 100644
 +{
 +  if (st->bad_line)
 +    return;                               // a refused row ends the file
++  /*
++    A `.sym' longer than one page is not one table: slew() breaks the page and
++    repeats a four-line header - a form feed with the version line ending
++    `Page N', the radix line, a timestamp, and the section title again - before
++    any further rows. The version line looks exactly like a record whose value
++    is the page number, so every real build lost everything past its first page
++    break: t/map/tiny.sym, straight out of sdcc 4.6.0, was refused at line 61
++    with `'2' is not an address' and bound nothing after it. The section title
++    is deliberately not swallowed, since it is what re-selects the section.
++  */
++  if (st->header_left > 0)
++    {
++      st->header_left--;                  // the radix line, then the timestamp
++      return;
++    }
++  if (line.c(0) == '\f')
++    {
++      st->header_left= 2;
++      return;
++    }
 +  long line_nr= st->line_nr;
 +  /* the record columns are fixed width and the first one is often blank, so
 +     the line is split as it stands; only the headings are trimmed */
@@ -654,6 +898,11 @@ index fcd8641..b932cbe 100644
 +    return;
 +  if (sym_banner_line(line))
 +    return;
++  if (sym_radix_line(line))
++    {
++      st->header_left= 1;                 // the timestamp slew() prints next
++      return;
++    }
 +  if (line == "Symbol Table")
 +    {
 +      st->section= sym_s_symbols;
@@ -713,6 +962,7 @@ index fcd8641..b932cbe 100644
 +  st.rows= new cl_list(16, 32, "sym_rows");
 +  st.section= sym_s_none;
 +  st.line_nr= 1;
++  st.header_left= 0;
 +  st.bad_line= 0;
 +  st.bad_why= "";
 +  st.undefined= 0;
@@ -832,7 +1082,7 @@ index fcd8641..b932cbe 100644
  static int h1(const char *s, int p)
  {
    int r= 0;
-@@ -2141,6 +2638,21 @@ cl_uc::read_file(chars nam, class cl_console_base *con, bool just_check)
+@@ -2141,6 +2862,21 @@ cl_uc::read_file(chars nam, class cl_console_base *con, bool just_check)
  	}
        delete c;
      }
@@ -854,7 +1104,7 @@ index fcd8641..b932cbe 100644
    delete f;
  
    if (!just_check)
-@@ -3163,22 +3675,42 @@ cl_uc::do_brk(void)
+@@ -3163,22 +3899,42 @@ cl_uc::do_brk(void)
    bool ret= false;
  
    if ((sim->state & SIM_GO) &&
@@ -913,18 +1163,19 @@ index fcd8641..b932cbe 100644
  
    return ret;
 diff --git a/ucsim/src/core/sim.src/uccl.h b/ucsim/src/core/sim.src/uccl.h
-index b7d2cae..aa4fac9 100644
+index b7d2cae..80c6c23 100644
 --- a/ucsim/src/core/sim.src/uccl.h
 +++ b/ucsim/src/core/sim.src/uccl.h
-@@ -369,6 +369,7 @@ public:
+@@ -369,6 +369,8 @@ public:
    virtual long read_p2h_file(cl_f *f, bool just_check= false);
    virtual long read_cdb_file(cl_f *f);
    virtual long read_map_file(cl_f *f);
++  virtual long read_sdld_map_file(class cl_list *lines);
 +  virtual long read_sym_file(cl_f *f, class cl_console_base *con= NULL);
    virtual long read_s19_file(cl_f *f);
    virtual cl_f *find_loadable_file(chars nam);
    virtual long read_file(chars nam, class cl_console_base *con, bool just_check= false);
-@@ -504,6 +505,20 @@ public:
+@@ -504,6 +506,20 @@ public:
  			      class cl_memory **mem,
  			      t_addr *addr);
    virtual bool symbol2cell(char *sym, class cl_memory_cell **cell);
@@ -4816,7 +5067,7 @@ index 2cc9cc1..7f482c5 100644
    //virtual const char *cfg_help(t_addr addr);
  
 diff --git a/ucsim/src/sims/s51.src/uc51.cc b/ucsim/src/sims/s51.src/uc51.cc
-index 37edd9f..a2edffa 100644
+index 37edd9f..111fb85 100644
 --- a/ucsim/src/sims/s51.src/uc51.cc
 +++ b/ucsim/src/sims/s51.src/uc51.cc
 @@ -187,34 +187,64 @@ static struct name_entry sfr_tab51[]=
@@ -5005,7 +5256,7 @@ index 37edd9f..a2edffa 100644
  
    {0, 0, NULL}
  };
-@@ -1340,6 +1393,56 @@ cl_51core::make_vars(void)
+@@ -1340,6 +1393,68 @@ cl_51core::make_vars(void)
      }
  }
  
@@ -5030,8 +5281,8 @@ index 37edd9f..a2edffa 100644
 +cl_51core::sym_memory(const char *area, t_addr addr)
 +{
 +  static const char *const data_areas[]= {
-+    "DSEG", "PSEG", "XSEG", "XISEG", "SSEG", "OSEG", "DATA", "INITIALIZED",
-+    "REG_BANK", "GENOVER",
++    "DSEG", "PSEG", "XSEG", "XISEG", "ISEG", "SSEG", "OSEG", "DATA",
++    "INITIALIZED", "REG_BANK", "GENOVER",
 +    NULL
 +  };
 +  bool data= !(area && *area);
@@ -5044,6 +5295,18 @@ index 37edd9f..a2edffa 100644
 +        name.substr(1, name.len() - 1);
 +      if (strstr(name.c_str(), "BSEG") != NULL)
 +        return NULL;
++      /*
++        XSEG and XISEG name external RAM whatever their address says. sdcc
++        links XSEG at 0x0001 by default (its own link command says `-b XSEG
++        = 0x0001'), so the first `__xdata' object sits at 0x0001, where the
++        ladder at the foot of this function answers iram and puts the symbol
++        in the wrong memory. lkmem.c sizes XRam from exactly these two names
++        (`EQ(xp->a_id, "XSEG") || EQ(xp->a_id, "XISEG")'), which is the
++        authority for treating the name as decisive here.
++      */
++      if (strstr(name.c_str(), "XSEG") != NULL ||
++          strstr(name.c_str(), "XISEG") != NULL)
++        return (xram && xram->valid_address(addr)) ? xram : NULL;
 +      for (int i= 0; data_areas[i] && !data; i++)
 +        if (strstr(name.c_str(), data_areas[i]) != NULL)
 +          data= true;
@@ -5062,7 +5325,7 @@ index 37edd9f..a2edffa 100644
  /*
   * Destroying the micro-controller object
   */
-@@ -2062,6 +2165,21 @@ cl_51core::do_interrupt(void)
+@@ -2062,6 +2177,21 @@ cl_51core::do_interrupt(void)
    if (!((ie= sfr->get(IE)) & bmEA))
      return(resGO);
    class it_level *il= (class it_level *)(it_levels->top()), *IL= 0;
@@ -5084,7 +5347,7 @@ index 37edd9f..a2edffa 100644
    for (i= 0; i < it_sources->count; i++)
      {
        class cl_it_src *is= (class cl_it_src *)(it_sources->at(i));
-@@ -2069,34 +2187,102 @@ cl_51core::do_interrupt(void)
+@@ -2069,34 +2199,102 @@ cl_51core::do_interrupt(void)
  	  is->enabled() &&
  	  is->pending())
  	{

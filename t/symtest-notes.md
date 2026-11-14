@@ -22,8 +22,10 @@ Everything about *using* a name already worked; only the *loader* was missing.
   `break _load_acc` once `var _load_acc rom 0x3a` has been typed by hand, and
   `bpcmdtest` already fires `break 0x3a if z==0x5a` through a hand-bound name.
 * `cl_uc::read_cdb_file` (SDCC's CDB records) and `cl_uc::read_map_file`
-  (linker map) exist and were not touched. `read_file` already looked for a
-  `.cdb` and a `.map` sibling of a loaded image.
+  (linker map) exist and were not touched by this work. `read_file` already
+  looked for a `.cdb` and a `.map` sibling of a loaded image. (`read_map_file`
+  has since grown a second parser for what current `sdld` prints; see
+  `t/maptest-notes.md`.)
 * `valid_sym_name()` (`core/utils.src/utils.h`) rejects names the console could
   never type.
 
@@ -115,14 +117,32 @@ without its extension).
   suite anchors a message at the start of a line.
 * `-q` suppresses the `N symbols read from` count; the suite keys on the
   diagnostics `read_sym_file` prints itself.
+* A real `.sym' is not one table. `lstsym()' breaks the page (`slew()' in
+  `asxx/aslist.c': a form feed with the version line ending `Page N', then the
+  radix line, a timestamp and the section title again) - in t/map/tiny.sym that
+  break falls at line 61 - and every hand-written fixture in this suite fits on
+  one page. So since the `.sym' loader shipped, both this loader and
+  `LoadSym51.java' refused the second page of any real build at its banner
+  (`sym: tiny.sym:61: `2' is not an address') and bound nothing after it. An
+  agreement gate made of one-page fixtures passed the whole time. The header is
+  now recognised on both sides, and the last leg of `symmaptest' is the gate.
+* An area whose name says external RAM is external whatever its address says.
+  sdcc links XSEG at 0x0001 (`-b XSEG = 0x0001' in its own link command), so the
+  first `__xdata' object of every real build sat where the address ladder
+  answered `iram` - a symbol pointing at the wrong memory, which is the one
+  thing a symbol loader must not do on a machine where MOV and MOVX are the
+  difference. `lkmem.c`, which sizes `XRam' from the two area names, is the
+  authority for the rule.
 
 ## What upstream would need
 
-* A `.map` reader for what current `sdld` prints. `read_map_file` matches the
-  legacy ASlink layout (`Area / Addr / Size` headings and `C:`-prefixed symbol
-  rows, `s_wait_area`/`s_wait_seginfo` state machine); modern `sdld` prints
-  `%04X`-address plus name rows, which that machine never recognises. Not
-  duplicated here.
+* A `.map' reader for what current `sdld' prints: **done**, see
+  `t/maptest-notes.md`. `read_map_file` used to match only the legacy ASlink
+  layout (`Area / Addr / Size` headings and `C:`-prefixed symbol rows, the
+  `s_wait_area`/`s_wait_seginfo` state machine), which modern `sdld` output
+  matched in almost no line: measured, a wide map bound 8 names - the ROM
+  symbols that happened to carry a page prefix, all to `rom`, each with the
+  leading `_` stripped - and a narrow map bound none, silently.
 * Area bases, if a `.sym` is ever to place linked builds on its own: either read
   the bases from the map, or let the user set them (`var` per symbol is the
   workaround today).

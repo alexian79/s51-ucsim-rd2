@@ -5,7 +5,8 @@ WHAT THIS PROVES
 ----------------
 `uCsim' binds the names of an ASxxxx symbol table with cl_uc::read_sym_file() plus
 cl_51core::sym_memory(); gh/LoadSym51.java does it for Ghidra.  Both read the same bytes
-here - t/isa.ihx and the t/symtest*.sym fixtures of t/symtest.py - and each side is
+here - t/isa.ihx with the t/symtest*.sym fixtures of t/symtest.py plus the real
+multi-page t/map/tiny.sym that t/maptest.py links - and each side is
 asked what it named and where:
 
   * the simulator: `info variables' before and after `sym FILE'.  The names that appear
@@ -57,7 +58,7 @@ WHY THE CONTROL AND THE MISMATCH ARE NOT OPTIONAL
     003A -> 003C) is given to one tool at a time, and the gate MUST report that name with
     both addresses.  A gate that can only pass proves nothing.  `symmaptest.py --skew'
     hands the skewed run to the agreement leg itself: the whole gate then reports
-    `FAIL 9/10 legs' and exits 1, which is the demonstration, never a mode that passes.
+    `FAIL 10/11 legs' and exits 1, which is the demonstration, never a mode that passes.
 
 WHAT THE TWO TOOLS GENUINELY DO DIFFERENTLY (measured, reported, not asserted away)
 -----------------------------------------------------------------------------------
@@ -104,6 +105,8 @@ def fixture(name):
 WIDE = fixture("symtest.sym")
 NARROW = fixture("symtest_narrow.sym")
 BAD = fixture("symtest_bad.sym")
+#: a real tool chain's own symbol table, two pages long (t/maptest.py links it)
+PAGE = fixture(os.path.join("map", "tiny.sym"))
 
 
 def skewed_fixture():
@@ -126,8 +129,13 @@ def skewed_fixture():
 
 
 def xseg_fixture():
-    """A `.sym' whose records sit in an external-data area, i.e. values past 0xff - the
-    one branch of cl_51core::sym_memory() no shipped fixture reaches.
+    """A `.sym' whose records sit in an external-data area, i.e. the one branch of
+    cl_51core::sym_memory() no shipped fixture reaches - at BOTH ends of it.  Past 0xff
+    is the branch the old address ladder got right by accident; 0x0000 and 0x0001 are
+    the expensive ones, because sdcc links XSEG at 0x0001 (its own link command says
+    `-b XSEG = 0x0001'), so the first `__xdata' object of every real build lands where
+    classifying by address alone answers internal RAM - and MOVX against MOV is exactly
+    where that costs a reverse engineer.
 
     WHERE THE AREA STRING COMES FROM.  A symbol record's first four columns are a hex
     area REFERENCE NUMBER (` %2X ' in lstsym(); that is why the shipped fixtures read
@@ -158,6 +166,8 @@ def xseg_fixture():
         f.write(row("E", "_xd_far", 0x1234, "GR"))     # XDATA block of EXTMEM
         f.write(row("E", "_xd_near", 0x0100, "GR"))    # XRAM block of EXTMEM
         f.write(row("F", "_xd_uscore", 0x0200, "GR"))  # sdcc's `_XSEG' spelling
+        f.write(row("E", "_xd_low", 0x0001, "GR"))    # where sdcc actually links XSEG
+        f.write(row("E", "_xd_zero", 0x0000, "GR"))   # and the base itself
         f.write("\nArea Table\n\n")
         f.write(area("E", "XSEG", 0x40, 0))
         f.write(area("F", "_XSEG", 0x40, 0))
@@ -440,9 +450,10 @@ def check_narrow(c):
     return None
 
 def check_xseg(c):
-    """The branch the shipped fixtures never reach: a value past 0xff in an external-data
-    area.  The simulator must call it xram and Ghidra must place it in EXTMEM at the same
-    offset; if either parks it in code or refuses it, this leg fails.
+    """The branch the shipped fixtures never reach: external data, both past 0xff and at
+    the bottom of external RAM where sdcc really links it.  The simulator must call every
+    one of them xram and Ghidra must place it in EXTMEM at the same offset; if either
+    parks one in code, in internal RAM, or refuses it, this leg fails.
 
     The pspec splits external data into two memory BLOCKS, XRAM (EXTMEM:0000-06ff) and
     XDATA (EXTMEM:0700-ffff), but they are ONE address space: 0x0100 and 0x1234 are both
@@ -453,9 +464,9 @@ def check_xseg(c):
     for p in problems:
         print("     %s" % p)
     if problems:
-        return "external data beyond 0xff disagrees on %d name(s)" % len(problems)
-    if len(c["sim_xseg"]) < 3:
-        return "expected three external-data names, the simulator placed %s" % (
+        return "external data disagrees on %d name(s)" % len(problems)
+    if len(c["sim_xseg"]) < 5:
+        return "expected five external-data names, the simulator placed %s" % (
             fmt(c["sim_xseg"]))
     wrong = ["%s: simulator %s[0x%x]" % (n, v[0], v[1])
              for n, v in sorted(c["sim_xseg"].items()) if v[0] != "xram"]
@@ -503,6 +514,134 @@ def check_bad(c):
     return None
 
 
+def sym_rows(path):
+    """name -> (area ref, printed value, flags, line) for the symbol rows of a real
+    `.sym', read here independently of either tool.  It has two shapes: an absolute
+    symbol prints `name = value L', an area-relative one prints `ref name value
+    flags' with the value relative to the area whose number is in the first column
+    (the Area Table at the foot of the file, 27 areas here, so the ref runs to two
+    hex digits).  The `=' distinguishes the two, and it has to be tested first: a
+    row for the SFR alias `A' otherwise reads as ref `A' with name `='.  Rows with
+    no flag letter at all (sdas8051's `ar0') still count.
+    """
+    absolute = re.compile(r"^ +(\S+) += +([0-9A-F*]{4,8}) +([A-Z]+)? *$")
+    relative = re.compile(r"^ +([0-9A-F]{1,2}) (\S+) +([0-9A-F*]{4,8}) +([A-Z]+)? *$")
+    rows = {}
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            m = absolute.match(line)
+            if m:
+                rows[m.group(1)] = ("-", m.group(2), m.group(3) or "", n)
+                continue
+            m = relative.match(line)
+            if m:
+                rows[m.group(2)] = (m.group(1), m.group(3), m.group(4) or "", n)
+    return rows
+
+
+#: What the linker map says each object of this build lives in - t/maptest.py reads
+#: those addresses out of t/map/tiny-wide.map, and t/map/tiny.sym is the same program.
+WHERE = {"_xvar": "xram", "_xinit": "xram", "_counter": "iram",
+         "_table": "rom", "_code_near": "rom", "_main": "rom"}
+
+
+def check_page(c):
+    """A real tool chain's `.sym', longer than one page.
+
+    `lstsym()' does not print one table: `slew()' breaks the page and repeats a
+    four-line header - a form feed with the version line ending `Page N', the radix
+    line, a timestamp, then the section title again.  The version line is
+    indistinguishable from a record whose value is the page number, so both tools
+    used to refuse t/map/tiny.sym at line 61 with `'2' is not an address' and bind
+    nothing after it, and an agreement gate built only out of one-page fixtures
+    passed while that happened.  Both tools must get past the break here and refuse
+    nothing.
+
+    Being a real file rather than an invented one, it says two more things the
+    hand-written fixtures cannot:
+
+      * An area-relative row carries the offset INSIDE the area, and the `.sym'
+        prints no area bases (t/symtest-notes.md, "Area bases"), so both tools bind
+        the offset: every object of this build lands on 0x0000 of the right memory,
+        where t/map/tiny-wide.map gives the same names real addresses.  The leg
+        therefore pins that each tool bound exactly the number the file printed, in
+        the memory the map says that object lives in - not an address the file does
+        not contain.
+      * sdas8051 emits its built-in SFR and bit aliases twice, `RXD' and `rxd'.
+        Ghidra refuses a name its symbol table already has case-INsensitively;
+        ucsim's cell table refuses case-SENSITIVELY, and the two tools' pre-load
+        namespaces differ anyway (ucsim knows `dph' as `dptr[0x1]', Ghidra knows
+        `RXD' as a symbol in its BITS space).  So a row can be bound by one tool and
+        refused as already-bound by the other without either being wrong.  A name
+        bound by one side alone is accepted only when the other side knew the name
+        before the file was loaded AND the row is one of those absolute alias rows -
+        a linker object is never allowed to diverge.
+    """
+    rows = sym_rows(PAGE)
+    sim_added, gh_added = c["sim_page"], c["gh_page"].cells()
+    gh_knew = set(n.lower() for n in c["gh_page"].before)
+    sim_knew = set(n.lower() for n in c["sim_base_vars"])
+    shared = set(sim_added) & set(gh_added)
+    problems = agree(dict((n, sim_added[n]) for n in shared),
+                     dict((n, gh_added[n]) for n in shared))
+    exempt = []
+    for name in sorted(set(sim_added) ^ set(gh_added)):
+        other_knew = (name.lower() in gh_knew) if name in sim_added \
+            else (name.lower() in sim_knew)
+        ref = rows[name][0] if name in rows else "?"
+        if other_knew and ref == "-":
+            exempt.append(name)
+        else:
+            problems.append("%s: bound by the %s alone (area ref %s, the other tool "
+                            "knew the name beforehand: %s)"
+                            % (name, "simulator" if name in sim_added else "ghidra",
+                               ref, other_knew))
+    for p in problems:
+        print("     %s" % p)
+    if problems:
+        return "past the page break the tools disagree on %d name(s)" % len(problems)
+    if not exempt:
+        return "nothing diverged, so the alias exemption was never exercised - the " \
+               "built-in SFR alias rows of sdas8051 are in this file, so either a " \
+               "tool changed its pre-load namespace or the fixtures moved"
+    if c["gh_page"].load_field("bad_line") not in (None, "-"):
+        return "ghidra refused a line: %s" % c["gh_page"].load
+    for line in c["out_sim_page"].splitlines():
+        if "nothing after it is loaded" in line:
+            return "the simulator refused a line: %s" % line.strip()
+    past = [n for n in ("_xvar", "_xinit", "_table")
+            if n in shared and rows[n][3] > 61]
+    if len(past) < 3:
+        return "nothing from past the break is bound by both (page-4 rows %s, bound by " \
+               "both %s)" % (", ".join(sorted(n for n in WHERE if n in rows)),
+                             ", ".join(sorted(past)))
+    for name in sorted(WHERE):
+        want = int(rows[name][1], 16)
+        if sim_added.get(name) != (WHERE[name], want):
+            return "%s: simulator %s, file says %s[0x%04X] on line %d" % (
+                name, sim_added.get(name), WHERE[name], want, rows[name][3])
+        g = gh_added.get(name)
+        if g is None or g[0] != SPACE_OF[WHERE[name]] or g[1] != want:
+            return "%s: ghidra %s, file says %s:0x%04X on line %d" % (
+                name, g, SPACE_OF[WHERE[name]], want, rows[name][3])
+    print("     %d name(s) added, %d of them from the page-4 rows past the break: %s"
+          % (len(sim_added), len(past), ", ".join(sorted(past))))
+    print("     %d bound by one tool alone, each an absolute alias row the other tool "
+          "knew before loading: %s" % (len(exempt), ", ".join(sorted(exempt))))
+    print("     every object binds the offset the file printed, so _xvar is xram[0x0000]"
+          " here and xram[0x0001] in the map, whose XSEG base is 0x0001")
+    for line in c["out_sim_page"].splitlines():
+        if re.match(r"^_xvar \w+\[0x", line.strip()):
+            print("     simulator: %s" % line.strip())
+    for line in c["gh_page"].out.splitlines():
+        if line.startswith("SYM ") and " _xvar" in line:
+            print("     ghidra:    %s" % line)
+    print("     t/map/tiny.sym refused at line 61 by both tools before the page"
+          " header was recognised")
+    return None
+
+
 LEGS = [
     ("spaces exist and are mapped", check_spaces),
     ("wide fixture agrees", check_agree),
@@ -512,8 +651,9 @@ LEGS = [
     ("**** row refused by both", check_undefined),
     ("pspec names kept by both", check_precedence),
     ("narrow fixture agrees", check_narrow),
-    ("external data beyond 0xff", check_xseg),
+    ("external data at both ends", check_xseg),
     ("malformed line: both stop", check_bad),
+    ("real multi-page .sym agrees", check_page),
 ]
 
 
@@ -535,12 +675,14 @@ def main():
     c["out_sim_bad"] = sim_run(BAD)
     c["out_sim_skew"] = sim_run(skew)
     c["out_sim_xseg"] = sim_run(XSEG)
+    c["out_sim_page"] = sim_run(PAGE)
     c["gh_base"] = Run(ghidra("base"))
     c["gh_wide"] = Run(ghidra("wide", WIDE))
     c["gh_narrow"] = Run(ghidra("narrow", NARROW))
     c["gh_bad"] = Run(ghidra("bad", BAD))
     c["gh_skew"] = Run(ghidra("skew", skew))
     c["gh_xseg"] = Run(ghidra("xseg", XSEG))
+    c["gh_page"] = Run(ghidra("page", PAGE))
 
     if not c["gh_base"].spaces:
         print("symmaptest: %s produced nothing at all, nothing was measured" % SCRIPT)
@@ -565,6 +707,7 @@ def main():
     c["sim_narrow"] = sim_delta(sim_vars(c["out_sim_narrow"]), c["sim_base_vars"])
     c["sim_bad"] = sim_delta(sim_vars(c["out_sim_bad"]), c["sim_base_vars"])
     c["sim_xseg"] = sim_delta(sim_vars(c["out_sim_xseg"]), c["sim_base_vars"])
+    c["sim_page"] = sim_delta(sim_vars(c["out_sim_page"]), c["sim_base_vars"])
     c["sim_skew"] = dict((n, v) for n, v in skew_after.items()
                          if n not in c["sim_base_vars"])
 

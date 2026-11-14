@@ -5,7 +5,7 @@ Base for 8051 decompilation work. Built on **ucsim 0.8.15** (D. Drotos, GPL-2), 
 model** (`s51.src/uc89c51r.cc`, class `cl_uc89c51r`).
 
 This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a
-verification bed of 25 counted suites plus `runtests` (reported, never counted), and the analysis
+verification bed of 26 counted suites plus `runtests` (reported, never counted), and the analysis
 notes that record what the datasheet actually says. The
 AT89C51RD2 Ghidra language is the sibling repo `ghidra-at89c51rd2`; the gated patch to Ghidra's
 shared 8051 include is `ghidra-8051-dual-dptr`. GPL-2.0-or-later (`LICENSE`); the upstream commit
@@ -17,7 +17,7 @@ this was built on, and the licensing of every piece, are in `NOTICE`.
     # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh                                   # configure + make (logs: /tmp/s51-*.log)
     ./s51 firmware.hex                           # interactive; == ucsim_51 -t 89C51R
-    cd t && ./floor.sh                           # 25 suites against that binary, ~2 min
+    cd t && ./floor.sh                           # 26 suites against that binary, ~2 min
 
 The 161 MB GPL base tree is not redistributed here. `patches/rd2-vs-ucsim-stc-441710c.patch` is
 verified against a fresh clone of that commit: applied there, `diff -rq` against the tree every
@@ -420,9 +420,10 @@ the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing u
 and banner artifacts.
 
 Items (1)-(11) are the whole delta from the vendored commit: `git -C vendor/ucsim-stc diff --stat`,
-with the four configure-generated files below excluded, reports **28 tracked files, 2255 insertions,
-190 deletions**; that count *excludes* the 10 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`,
-`rd2_boot`, `rd2_eeprom` and their headers, 2483 lines).
+with the four configure-generated files below excluded, reports **28 tracked files, 2494 insertions,
+192 deletions** (measured 2026-11-14 on the regenerated patch); that count *excludes* the 10
+untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`, `rd2_eeprom` and their headers,
+2483 lines).
 `patches/rd2-vs-ucsim-stc-441710c.patch` carries all **38** and is verified by applying it to a
 clean clone of `441710c`: zero content differences against the tree every suite here was run
 against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch` is the **X2-era
@@ -511,8 +512,23 @@ equals `expression iram[0x30]`; a fixture that claims `ACC` lives at `iram[0x30]
 which still reads `sfr[0xe0][7:0]`, while `_counter` reads the cell the file named; a malformed line
 reports its own line number and binds nothing after it. The fixtures are hand-written to `asxx`
 `lstsym()` output — both the `-w` one-per-line shape and the three-per-line `|` shape — because
-`sdas8051` is not installed here, and `t/symtest-notes.md` says so plainly along with the gap that
-remains: `read_map_file` still parses the legacy ASlink map, not modern `sdld` output.
+`sdas8051` was not installed when they were written, and `t/symtest-notes.md` says so plainly. The
+real tool chain exists now and `t/maptest.py` is built on it: those fixtures are *linked* bytes, not
+typed ones, and that paid for itself three times over — page breaks, `XSEG`, and a `.sym` that
+carries offsets where a map carries addresses, all recorded in `t/maptest-notes.md`.
+
+**A linker map out of a real build** (`t/maptest.py`, 10 legs, fixtures in `t/map/`): `file "tiny"`
+binds 12 names from a `sdld -w` map — `_main` to `rom[0x00d0]`, `_counter` to `iram[0x08]` because
+its area is `DSEG`, `_xvar` to `xram[0x0001]` because its area is `XSEG`, `_xinit` from `XISEG`,
+`__start__stack` to `iram[0x21]`, and the four `sdcc_atomic_*` — then prints
+`map: 72 row(s) are linker marks or unresolved globals, not symbols`, so every unbound row is
+accounted for instead of silent. Names arrive **verbatim**: the legacy machine stripped the leading
+`_`, which renames every C symbol this tool chain emits. The *same program* linked without `-w`
+produces a 3-column map whose name column is itself truncated, and binding it would hang `_code_nea`
+on `_code_near`'s address, so that layout is refused with the fix in the message (`sdld -w`) — and
+the load with **no** map at all stays silent, which is the control that turns the refusal into
+evidence. `_flag`, the `__bit` object, is bound by neither loader, for two different reasons, and
+both are pinned. `break _main` then stops exactly once, which is the point of the whole exercise.
 
 **A scripted debugger** (`tools/s51dbg.py` and `t/s51dbgtest.py`, 68 legs, **green on both build
 families**): the driver owns a `-Z` session and answers in JSON verbs, asserting on stop codes and on
@@ -572,7 +588,7 @@ Manual that doc4235 defers to — doc4235 itself contains no flag semantics):
 overflow expression. **ucsim is the only one of the three matching the Atmel documentation on
 both cases.**
 
-**Running everything** — `t/floor.sh [binary]` runs the 25 simulation suites against one binary in
+**Running everything** — `t/floor.sh [binary]` runs the 26 simulation suites against one binary in
 about two minutes. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
 now reads that variable. That was not true until the SPI cutover: eleven suites hard-coded the
 vendor path, so a floor "run against another build" was silently re-testing the vendor tree for
@@ -602,7 +618,7 @@ may run alongside either of them, but never twice at once, since both write the 
 
 ## Reproducing
 
-    ./floor.sh                        # 25 suites vs one binary, ~2 min; $1 = binary to test
+    ./floor.sh                        # 26 suites vs one binary, ~2 min; $1 = binary to test
     ~/s51/build.sh                    # (the lines below assume the tree is at ~/s51)
     cd ~/s51/t
     ./uctrace.py tC.hex 4                # manual's worked example -> 6d 85
@@ -650,9 +666,10 @@ instruction; `xval` prints the same tuples from the other core, so the two are d
                                verification rules -- the long form of everything below
     doc4235-spec.md            what the datasheet says, section + PRINTED page for each answer
     ucsim-periph-pattern.md    how to add a peripheral to this codebase, learned from the four
-    t/                         floor of 25 counted suites plus runtests (reported, never
-                               counted) + the Ghidra-side suites, images, mkhex.py,
-                               uctrace.py, xcompare.py, runtests.py
+    t/                         floor of 26 counted suites plus runtests (reported, never
+                               counted) + the Ghidra-side suites, images, the real sdcc
+                               fixtures in t/map/, mkhex.py, uctrace.py, xcompare.py,
+                               runtests.py, and the notes beside each suite
     gh/                        GhidraScripts and the hex fixtures they read (duplicated in the
                                language repo so each repo runs alone)
     xval/                      my Rust driver for the independent i8051 core; needs
