@@ -1311,11 +1311,17 @@ Standard, `Fosc` in X2); reading `FPER` as `Fosc/12` misses by 6× and 12×.
   a core sitting in `run` never polls stdin at all, so a sled jumps to itself forever at 100 % CPU
   (verified — `run` then EOF was still burning when `timeout -s KILL` took it at 5 s). `wptrtest`'s
   control leg is exactly this session by design — a watchpoint that never fires leaves the sled
-  running, and "killed" *is* the leg's evidence — so **every floor run stranded one spinning core**,
-  and 33 of them were still burning when the machine was finally checked. `t/simproc.py:run_pipe`
+  running, and "killed" *is* the leg's evidence — so **every floor run stranded one spinning core**.
+  The fix is `t/simproc.py:run_pipe`, which
   starts the shell in its own session and SIGKILLs the whole group; new console pipelines go through it
-  and never through `subprocess.run`. After any floor, `ps -eo pid,ppid,args | awk '$2==1 && /ucsim/'`
-  must print nothing.
+  and never through `subprocess.run`. Audit after any run with `ps -eo pid,ppid,args | awk '$2==1 &&
+  /89C51/'`, which must print nothing — and match on the **device argument**, never on a binary name:
+  the first audit here matched `/ucsim/` and so silently missed eleven consoles that hand-run probes
+  had left against the unpatched control build `/tmp/s51-bed-base`, which is not named anything like
+  `ucsim`. Counting them in, 44 reparented consoles were burning when the machine was finally checked.
+  The audit is not left to anyone's memory: `t/floor.sh` counts PPID-1 consoles after the suites and
+  fails the floor as `process-leak(N)` when it finds one, which is also where a hand-run probe that
+  leaks gets caught — the floor is the thing that runs after them.
 
 - **A suite that has been red for a long time is usually a stale expectation, not a broken model —
   but only after the model has been re-read against the primary source.** `irctest` sat at 48/50 for

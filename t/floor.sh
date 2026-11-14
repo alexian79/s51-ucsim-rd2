@@ -51,6 +51,19 @@ for s in $SUITES; do
       ;;
   esac
 done
+# Process hygiene: nothing may survive the floor.  A console pipeline whose timeout took only the
+# driving `sh' leaves its simulator reparented to init, and a core sitting in `run' never polls
+# stdin, so the closed pipe cannot stop it either -- it burns a core until someone notices (the fix
+# is t/simproc.py:run_pipe).  Match the DEVICE argument as well as the binary name: the control
+# builds this bed compares against are not called ucsim_*, and a name-only pattern walked straight
+# past eleven orphaned consoles once.  Only PPID 1 rows count, which excludes every suite's own
+# children -- and this check's own ps/awk -- by construction.
+strays=$(ps -eo ppid=,args= | awk '$1 == 1 && (/-t 89C51/ || /ucsim/)' | wc -l)
+if [ "$strays" -ne 0 ]; then
+  printf 'hygiene: %s reparented simulator console(s) survived this run\n' "$strays"
+  ps -eo pid=,ppid=,etimes=,args= | awk '$2 == 1 && (/-t 89C51/ || /ucsim/)' | cut -c1-110
+  fail=$((fail+1)); names="$names process-leak($strays)"
+fi
 echo "binary: $BIN"
 echo "floor: $fail suite(s) not green${names:+ --$names}"
 exit $fail
