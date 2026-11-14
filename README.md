@@ -4,7 +4,7 @@ Base for 8051 decompilation work. Built on **ucsim 0.8.15** (D. Drotos, GPL-2), 
 `CrispStrobe/ucsim-stc`, selected because it already ships a dedicated **AT89C51RD2 device
 model** (`s51.src/uc89c51r.cc`, class `cl_uc89c51r`).
 
-This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a 22-suite
+This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a 24-suite
 verification bed, and the analysis notes that record what the datasheet actually says. The
 AT89C51RD2 Ghidra language is the sibling repo `ghidra-at89c51rd2`; the gated patch to Ghidra's
 shared 8051 include is `ghidra-8051-dual-dptr`. GPL-2.0-or-later (`LICENSE`); the upstream commit
@@ -15,7 +15,7 @@ this was built on, and the licensing of every piece, are in `NOTICE`.
     git -C vendor/ucsim-stc apply patches/rd2-vs-ucsim-stc-441710c.patch
     ./build.sh                                   # configure + make (logs: /tmp/s51-*.log)
     ./s51 firmware.hex                           # interactive; == ucsim_51 -t 89C51R
-    cd t && ./floor.sh                           # 22 suites against that binary, ~35 s
+    cd t && ./floor.sh                           # 24 suites against that binary, ~70 s
 
 The 161 MB GPL base tree is not redistributed here. `patches/rd2-vs-ucsim-stc-441710c.patch` is
 verified against a fresh clone of that commit: applied there, `diff -rq` against the tree every
@@ -318,6 +318,44 @@ a doubled edge from two real ones. Pre-existing and device-independent — all t
 byte-identical in upstream v0.9.12 (`/tmp/ucsim-mainline` at `59a14ff9`) — and `t/t2cnttest.py`
 (30 legs, 9/30 before the fix) is what pins it.
 
+**(8) The `break` command silently threw away part of what you typed.** `cl_brk_cmd` matches a
+chain of grammar branches and then reads *fixed* parameter slots, so a branch could match a command
+legitimately and discard part of it in silence. `break 0x3a if 0` matched `CELL STRING STRING` — a
+bare number is a cell, and a numeric argument carries no string value — so the condition became the
+empty string and the command installed an **unconditional** breakpoint that stopped at everything.
+`break 0x3a iff ACC==0x5a` matched that same branch and the keyword test (`if (s == "if")`) fell
+through, again unconditionally; `break 0x3a hit 2` was discarded the same way and kept `Hit 1`. A
+debugger that stops where you did not ask is worse than one that refuses, so a condition argument
+that is not a string is now refused with an explanation, an unknown keyword after the address is
+refused, and `hit` is honoured on both the fetch and the event forms. *Refused* means nothing is
+created. Note what is **not** broken here: a bracket expression inside a *quoted* condition
+evaluates correctly (`if "iram[0x40]==0x5a"` fires, `…==0x5b` does not); only the unquoted form
+fails, because the console splits on spaces before the parser ever sees it. `t/bpcmdtest.py`
+(25 legs) pins the refusals and their messages, conditions at both polarities, `hit`, and the `var`
+bindings; 6 of its legs fail on the pre-fix binary by design.
+
+**(9) A fetch breakpoint could not be reached by single-stepping.** `cl_uc::do_brk()` tested fetch
+breakpoints only under `sim->steps_done > 0`, and `steps_done` resets to 0 at every stop, so the
+first instruction fetched after **every** stop was exempt — not just the one case that genuinely
+needs the exemption, a CPU still sitting on the breakpoint that stopped it. Measured: 12 consecutive
+`step` commands across an armed address gave zero `(104)` stops while PC walked past it, and after
+`pc 0x37` + `step` landed the CPU on the armed address, a following `run` sailed straight past the
+breakpoint sitting there. `step 30` did fire it, because those fetches happen mid-flight. The rule
+is now address-specific: `cl_sim::stop()` records which breakpoint stopped the CPU
+(`brk_stop_addr`/`brk_stop_valid`) and `do_brk()` exempts exactly one fetch of exactly that address.
+Event breakpoints never shared this gate — they are checked in the memory-cell write path — which is
+why their `(112)` reports appeared under bare `step` all along. `t/wptrtest.py` WP-K13/K14/K15 pin
+both rules and classify which one the binary under test implements.
+
+**(10) Two usage lines that lied.** `var`'s usage read `var name [memory addr [bit]]`, where
+`memory` was a placeholder and not a keyword; people typed it literally, got a `Parser error`, and
+the real cell form stayed hidden. It now reads
+`var name [mem addr [bit_nr [bit_nr_high]]] | var name mem[addr]`, and the literal `memory` form is
+refused instead of quietly binding the engine's own variable store. And `-d <portnum>` — the GDB
+remote server port — is back in `--help`: `app.cc` had its option text and the `DOPT` usage string
+commented out while `main()` still parsed it and assigned `rgdb_port`, so a working debugger feature
+was invisible.
+
 | file | change |
 |---|---|
 | `s51.src/regs51.h` | `bmXRS` (0x1c) next to `bmEXTRAM`; `CKCON0`/`CKCON1` addresses; `bmX2`…`bmWDX2`; `bmEEE` (0x02) and `bmEEBUSY` (0x01) on `EECON` |
@@ -333,6 +371,12 @@ byte-identical in upstream v0.9.12 (`/tmp/ucsim-mainline` at `59a14ff9`) — and
 | `s51.src/objs.mk` | `rd2_boot.o` and `rd2_eeprom.o` beside the other `rd2_*` objects |
 | `s51.src/rd2_eeprom.cc` / `rd2_eepromcl.h` | **new**: `cl_rd2_eeprom` (`RD2_EE_ID 17`), the AT89C51ED2 2048-byte data EEPROM as a per-access overlay on `xram` `0000h–07FFh` selected by `EECON.EEE`, with `EEBUSY` hardware-owned, `tWRITE` = 17 ms measured in oscillator clocks, commit on completion, and a `print_info` counter set |
 | `s51.src/port.cc` | the read-only `port_value` cfg mirror is updated with `cfg->set()` instead of `cfg->write()` at the latch, bit-write and `set_pin()` sites: `cl_hw::init()` registers every cfg cell back onto the element, so the old write re-entered `cl_port::write` and emitted a **second** `EV_PORT_CHANGED` per edge |
+| `core/cmd.src/cmd_bp.cc` | `cond_text()` helper; every `if (s == "if")` site refuses a non-string condition and any unknown keyword after the address; `hit` honoured on fetch and event forms; `CMDHELP` extended |
+| `core/cmd.src/cmd_uc.cc` | `var` usage line spells the two real forms instead of `[memory addr]` |
+| `core/utils.src/app.cc` | `DOPT` and the option text restored, so `-d portnum` appears in `--help` |
+| `core/sim.src/simcl.h` | `brk_stop_addr` / `brk_stop_valid` on `cl_sim` |
+| `core/sim.src/sim.cc` | `cl_sim::stop()` records the breakpoint that stopped the CPU, and clears the flag on every other stop reason |
+| `core/sim.src/uc.cc` | `do_brk()` exempts exactly one fetch of exactly the address that stopped us, instead of the first fetch after any stop |
 
 The change is gated on `type->type & CPU_89C51R` because **`cl_uc251` derives from
 `cl_uc89c51r`** and must keep the old mapping — without the guard, `config 251` regressed from a
@@ -340,12 +384,15 @@ The change is gated on `type->type & CPU_89C51R` because **`cl_uc251` derives fr
 the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing uninitialised-DPTR
 and banner artifacts.
 
-Items (1)-(7) are the whole delta from the vendored commit: `git -C
-vendor/ucsim-stc diff --stat` reports **24 tracked files, 1472 insertions, 175 deletions**, and that
-count *excludes* the untracked new peripheral files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`,
-`rd2_eeprom` and their headers). `~/s51/rd2-fixes.patch` is the **X2-era snapshot only** (14842
-bytes, 2026-10-11, 428 lines across 10 files); it still applies with `git apply --check` on a clean
-worktree of that commit, but it is not the current delta and must not be quoted as such.
+Items (1)-(10) are the whole delta from the vendored commit: `git -C
+vendor/ucsim-stc diff --stat` reports **30 tracked files, 1635 insertions, 200 deletions**, and that
+count *excludes* the 10 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`,
+`rd2_eeprom` and their headers, 2483 lines). `patches/rd2-vs-ucsim-stc-441710c.patch` carries all 40
+and is verified by applying it to a clean clone of `441710c`: zero content differences against the
+tree every suite here was run against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch`
+is the **X2-era snapshot only** (2026-10-11, 428 lines across 10 files); it still applies with
+`git apply --check` on a clean worktree of that commit, but it is not the current delta and must not
+be quoted as such.
 
 ## Verification
 
@@ -394,6 +441,26 @@ timer 2 (counter *and* capture) and the PCA ECI all advanced twice per edge; the
 `cfg->set()` at the three mirror sites, which stores the same value without notifying. The STC12
 port path is not covered by any suite here.
 
+**Breakpoint and `var` console grammar** (`t/bpcmdtest.py`, 25 legs on `t/isa.ihx`): the forms that
+used to build an unintended *unconditional* breakpoint are refused with a message and create nothing;
+conditions fire at `0x3a` for `if ACC==0x5a`, `if "ACC == 0x5a"`, `if "iram[0x40]==0x5a"` and
+`var z iram[0x40]` + `if z==0x5a`, and miss at the opposite constants; `break 0x3a hit 2` reads
+`Hit 2` exactly like the positional form, on fetch and event rows alike. Six legs fail on a pre-fix
+binary, which is the point. Every leg is bounded by a **sentinel** breakpoint at `0x44`: a session
+whose tested breakpoint never fires would simulate forever, and a simulator killed at a timeout loses
+its buffered output, which reads exactly like "no breakpoint was created".
+
+**Watchpoints as assertions, and the fetch-breakpoint stepping rule** (`t/wptrtest.py`, 27 legs,
+**green on both build families**): write- and read-watchpoints stop with `(112)` at the instruction
+*after* the access, against negative controls on cells the image never touches — an armed watchpoint
+that never stops is paired with its `info break` row plus proof the code really ran, because silence
+alone proves nothing; `break <varname>` arms two event breakpoints, one read and one write. Legs
+WP-K13/K14/K15 pin the fetch-breakpoint rule and classify the binary from behaviour, not version:
+`exempt-first` (upstream — 15 bare `step`s across an armed address give zero `(104)`) versus
+`address-specific` (this fork — one `(104)`, PC parks). Everything counts stop **codes**: `(104)`
+fired, `(109)` a step merely landed there, `(112)` an event break; `Stop at <addr>` is printed in
+every one of those cases.
+
 **Upstream testsuite** (`t/runtests.py`, replicates `src/test-lib.mk` and its ELIDE rules):
 11/20 baselines byte-identical. The failures are not model defects:
 
@@ -438,8 +505,8 @@ Manual that doc4235 defers to — doc4235 itself contains no flag semantics):
 overflow expression. **ucsim is the only one of the three matching the Atmel documentation on
 both cases.**
 
-**Running everything** — `t/floor.sh [binary]` runs the 22 simulation suites against one binary in
-about 30 s. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
+**Running everything** — `t/floor.sh [binary]` runs the 24 simulation suites against one binary in
+about 70 s. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
 now reads that variable. That was not true until the SPI cutover: eleven suites hard-coded the
 vendor path, so a floor "run against another build" was silently re-testing the vendor tree for
 most of its rows — the tell was `ident89c51r` printing the vendor path inside its own `PASS` line.
@@ -462,7 +529,7 @@ may run alongside either of them, but never twice at once, since both write the 
 
 ## Reproducing
 
-    ./floor.sh                        # 22 suites vs one binary, ~35 s; $1 = binary to test
+    ./floor.sh                        # 24 suites vs one binary, ~70 s; $1 = binary to test
     ~/s51/build.sh                    # (the lines below assume the tree is at ~/s51)
     cd ~/s51/t
     ./uctrace.py tC.hex 4                # manual's worked example -> 6d 85
@@ -501,7 +568,7 @@ instruction; `xval` prints the same tuples from the other core, so the two are d
                                verification rules -- the long form of everything below
     doc4235-spec.md            what the datasheet says, section + PRINTED page for each answer
     ucsim-periph-pattern.md    how to add a peripheral to this codebase, learned from the four
-    t/                         22-suite floor (floor.sh) + the Ghidra-side suites, images,
+    t/                         24-suite floor (floor.sh) + the Ghidra-side suites, images,
                                mkhex.py, uctrace.py, xcompare.py, runtests.py
     gh/                        GhidraScripts and the hex fixtures they read (duplicated in the
                                language repo so each repo runs alone)

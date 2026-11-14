@@ -43,7 +43,8 @@ instead of deduplicating it and the pin-drive legs fall to 0; count every latch 
 instead of every edge and the static/raising legs stop being 0.  Every leg that actually
 measures the defect fails on the control binary.
 
-Runs in a few seconds per binary; honours S51_SIM.  NOT wired into t/floor.sh.
+Runs in a few seconds per binary; honours S51_SIM, and S51_VCD=/path/to.vcd to
+also capture every leg's counter/pin signals as a VCD artifact.  NOT wired into t/floor.sh.
 """
 import os
 import re
@@ -56,6 +57,11 @@ from mkhex import write_hex
 SIM = os.environ.get("S51_SIM") or os.path.expanduser(
   "~/s51/vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
 TMP = "/tmp/t2cnt_%d.hex" % os.getpid()
+
+VCD = os.environ.get("S51_VCD")
+# counter/pin signals worth tracing here; every one exists under -t 89C51RD2 and
+# -t C52, and `add' auto-names them P1 P3 T2CON TL2 TH2 RCAP2L CL in the header:
+VCD_SIGNALS = (0x90, 0xB0, 0xC8, 0xCC, 0xCD, 0xCA, 0xE9)
 
 TCON, TMOD = 0x88, 0x89
 TL0, TL1, TH0 = 0x8A, 0x8B, 0x8C
@@ -80,6 +86,11 @@ def mov(a, v):
 def console(cmds, device="89C51RD2"):
     """One short scripted run; commands go on stdin, never on argv.  Refuses to
     score a run whose image did not load (a zero image steps happily)."""
+    if VCD:  # per-session capture; the artifact ends up holding the LAST leg
+        assert cmds and cmds[0].startswith('file "') and cmds[-1] == "exit"
+        cmds = ([cmds[0], 'set hw vcd file "%s"' % VCD] +
+                ['set hw vcd add sfr 0x%x' % a for a in VCD_SIGNALS] +
+                ["set hw vcd start"] + cmds[1:-1] + ["set hw vcd stop", "exit"])
     p = subprocess.run([SIM, "-t", device, "-c", "-"], input="\n".join(cmds) + "\n",
                        capture_output=True, text=True, cwd="/tmp", timeout=120)
     out = p.stdout + p.stderr
@@ -296,6 +307,9 @@ for name, expect, got, ok, note in results:
     bad += 0 if ok else 1
     print("%-56s %-12s %-12s %-4s %s" %
           (name, expect, got, "ok" if ok else "BAD", note))
+if VCD:
+    print("t2cnttest: vcd artifact: %s (%d bytes)" %
+          (VCD, os.path.getsize(VCD) if os.path.exists(VCD) else -1))
 print("binary: %s" % SIM)
 print("t2cnttest: %s %d/%d legs" % ("FAIL" if bad else "PASS", len(results) - bad,
                                     len(results)))

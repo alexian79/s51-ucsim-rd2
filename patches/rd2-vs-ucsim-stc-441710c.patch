@@ -53,6 +53,325 @@ index 6be0233..4e6ef33 100644
  enable_dlso	= no
  dlso_ok		= no
  
+diff --git a/ucsim/src/core/cmd.src/cmd_bp.cc b/ucsim/src/core/cmd.src/cmd_bp.cc
+index b4b0bad..753f9b7 100644
+--- a/ucsim/src/core/cmd.src/cmd_bp.cc
++++ b/ucsim/src/core/cmd.src/cmd_bp.cc
+@@ -45,6 +45,33 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
+  * BREAK command
+  */
+ 
++/*
++ * The condition has to survive the trip to the evaluator.  A parameter the
++ * console has turned into a number carries no string value, so
++ * `break 0x3a if 0' ended up with an empty condition: the command had
++ * matched a branch legitimately (three parameters, `CELL STRING STRING', and
++ * a bare number is a cell) and had thrown the tail away, leaving an
++ * UNCONDITIONAL breakpoint whose condition had silently disappeared.  A
++ * keyword that was not `if' -- `break 0x3a hit 2', `break 0x3a iff x' -- was
++ * discarded the same way.  Both are refused now, and `hit' is honoured,
++ * since the usage line offers it.
++ */
++static bool
++cond_text(chars *cond, class cl_cmd_arg *arg, class cl_console_base *con)
++{
++  char *s= arg->get_svalue();
++
++  if (!s ||
++      !*s)
++    {
++      con->dd_printf("A condition has to be a word or a quoted string, not a\n"
++		     "bare number; nothing was created.\n");
++      return(false);
++    }
++  *cond= s;
++  return(true);
++}
++
+ //int
+ //cl_break_cmd::do_work(class cl_sim *sim,
+ //		      class cl_cmdline *cmdline, class cl_console *con)
+@@ -69,7 +96,15 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     mem= uc->address_space(params[0]->value.cell, &addr);
+     s= params[2]->get_svalue();
+     if (s == "if")
+-      cond= params[3]->get_svalue();
++      {
++	if (!cond_text(&cond, params[3], con))
++	  return(false);
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     if (mem && (mem == uc->rom))
+       do_fetch(uc, addr, hit, cond, con);
+     else
+@@ -91,7 +126,24 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     mem= uc->address_space(params[0]->value.cell, &addr);
+     s= params[1]->get_svalue();
+     if (s == "if")
+-      cond= params[2]->get_svalue();
++      {
++	if (!cond_text(&cond, params[2], con))
++	  return(false);
++      }
++    else if (s == "hit")
++      {
++	if (!params[2]->as_number())
++	  {
++	    syntax_error(con);
++	    return(false);
++	  }
++	hit= params[2]->value.number;
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     if (mem && (mem == uc->rom))
+       do_fetch(uc, addr, hit, cond, con);
+     else
+@@ -153,7 +205,15 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     hit= params[3]->value.number;
+     s= params[4]->get_svalue();
+     if (s == "if")
+-      cond= params[5]->get_svalue();
++      {
++	if (!cond_text(&cond, params[5], con))
++	  return(false);
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     do_event(uc, mem, op, addr, hit, cond, con);
+   }
+   else if (cmdline->syntax_match(uc, MEMORY STRING ADDRESS NUMBER)) {
+@@ -170,7 +230,24 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     hit= 1;
+     s= params[3]->get_svalue();
+     if (s == "if")
+-      cond= params[4]->get_svalue();
++      {
++	if (!cond_text(&cond, params[4], con))
++	  return(false);
++      }
++    else if (s == "hit")
++      {
++	if (!params[4]->as_number())
++	  {
++	    syntax_error(con);
++	    return(false);
++	  }
++	hit= params[4]->value.number;
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     do_event(uc, mem, op, addr, hit, cond, con);
+   }
+   else if (cmdline->syntax_match(uc, MEMORY STRING ADDRESS)) {
+@@ -185,7 +262,15 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     hit= params[1]->value.number;
+     s= params[2]->get_svalue();
+     if (s == "if")
+-      cond= params[3]->get_svalue();
++      {
++	if (!cond_text(&cond, params[3], con))
++	  return(false);
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     do_fetch(uc, addr, hit, cond, con);
+   }
+   else if (cmdline->syntax_match(uc, ADDRESS NUMBER)) {
+@@ -198,7 +283,24 @@ COMMAND_DO_WORK_UC(cl_break_cmd)
+     hit= 1;
+     s= params[1]->get_svalue();
+     if (s == "if")
+-      cond= params[2]->get_svalue();
++      {
++	if (!cond_text(&cond, params[2], con))
++	  return(false);
++      }
++    else if (s == "hit")
++      {
++	if (!params[2]->as_number())
++	  {
++	    syntax_error(con);
++	    return(false);
++	  }
++	hit= params[2]->value.number;
++      }
++    else
++      {
++	syntax_error(con);
++	return(false);
++      }
+     do_fetch(uc, addr, hit, cond, con);
+   }
+   else if (cmdline->syntax_match(uc, ADDRESS)) {
+@@ -229,7 +331,11 @@ CMDHELP(cl_break_cmd,
+ 	"must be hit before acception.\n"
+ 	"`Expr' parameter can specify an expression which is evaluated\n"
+ 	"at every hit of the breakpint and it will be accepted only when\n"
+-	"the result is true.")
++	"the result is true.  The command line is split on spaces, so `Expr'\n"
++	"must be a single token (`if ACC==0') or a single quoted string\n"
++	"(`if \"ACC == 0\"').  A number is not an expression: `if 0' is\n"
++	"refused instead of being dropped and leaving an unconditional\n"
++	"breakpoint behind.")
+ 
+ void
+ cl_break_cmd::do_fetch(class cl_uc *uc,
+diff --git a/ucsim/src/core/cmd.src/cmd_uc.cc b/ucsim/src/core/cmd.src/cmd_uc.cc
+index e85065b..4e35585 100644
+--- a/ucsim/src/core/cmd.src/cmd_uc.cc
++++ b/ucsim/src/core/cmd.src/cmd_uc.cc
+@@ -1028,7 +1028,7 @@ COMMAND_DO_WORK_UC(cl_var_cmd)
+ }
+ 
+ CMDHELP(cl_var_cmd,
+-	"var name [memory addr [bit_nr]]",
++	"var name [mem addr [bit_nr [bit_nr_high]]] | var name mem[addr]",
+ 	"Create new variable",
+ 	"")
+ 
+diff --git a/ucsim/src/core/sim.src/sim.cc b/ucsim/src/core/sim.src/sim.cc
+index ebb8e9a..72650b9 100644
+--- a/ucsim/src/core/sim.src/sim.cc
++++ b/ucsim/src/core/sim.src/sim.cc
+@@ -60,6 +60,8 @@ cl_sim::cl_sim(class cl_app *the_app):
+   //arguments= new cl_list(2, 2);
+   //accept_args= more_args?strdup(more_args):0;
+   gui= new cl_gui(this);
++  brk_stop_addr= 0;
++  brk_stop_valid= false;
+ }
+ 
+ int
+@@ -221,7 +223,11 @@ cl_sim::stop(int reason)
+ 
+       b->breaking();
+       steps_done= 0;
++      brk_stop_addr= b->addr;
++      brk_stop_valid= true;
+     }
++  else
++    brk_stop_valid= false;
+   
+   if (!(state & SIM_GO) &&
+       cmd->frozen())
+diff --git a/ucsim/src/core/sim.src/simcl.h b/ucsim/src/core/sim.src/simcl.h
+index f7068d6..e3c5f03 100644
+--- a/ucsim/src/core/sim.src/simcl.h
++++ b/ucsim/src/core/sim.src/simcl.h
+@@ -60,6 +60,12 @@ public:
+   unsigned long steps_done;
+   unsigned long steps_todo; // use this if not 0
+   uint32_t      exec_limit; // max nr of instr in run/step
++  // A fetch breakpoint stops the CPU with PC still sitting on it, so the first
++  // fetch after such a stop must be allowed past that one breakpoint or it
++  // would trigger again at once.  This says which breakpoint, so that exactly
++  // that fetch is suppressed rather than the first fetch after every stop.
++  t_addr brk_stop_addr;
++  bool brk_stop_valid;
+   
+ public:
+   cl_sim(class cl_app *the_app);
+diff --git a/ucsim/src/core/sim.src/uc.cc b/ucsim/src/core/sim.src/uc.cc
+index fcd8641..d5020af 100644
+--- a/ucsim/src/core/sim.src/uc.cc
++++ b/ucsim/src/core/sim.src/uc.cc
+@@ -3163,22 +3163,42 @@ cl_uc::do_brk(void)
+   bool ret= false;
+ 
+   if ((sim->state & SIM_GO) &&
+-      rom &&
+-      (sim->steps_done > 0))
++      rom)
+     {
+-      if (vcd_break)
+-        {
+-          vcd_break = false;
+-          ret= true;
+-        }
+-      if (rom->get_cell_flag(PC, CELL_FETCH_BRK))
+-	if ((brk= fbrk->get_bp(PC, &idx)))
+-	  if (brk->do_hit())
+-	    {
+-	      if (brk->perm == brkDYNAMIC)
+-		fbrk->del_bp(PC);
+-	      ret= true;
+-	    }
++      bool past_brk= false;
++
++      /* A CPU that a fetch breakpoint stopped is still sitting on it, so the
++	 first fetch after such a stop has to be allowed past that breakpoint.
++	 Suppress that one fetch of that one address, and nothing else.
++
++	 The rule used to be `sim->steps_done > 0', which suppressed the first
++	 fetch after EVERY stop, a `step' landing included.  That made it
++	 impossible to step onto a fetch breakpoint, and worse: after stepping
++	 onto an armed address, `run' sailed past the breakpoint set there,
++	 because that fetch was exempt as well. */
++      if (sim->steps_done == 0 &&
++	  sim->brk_stop_valid)
++	{
++	  sim->brk_stop_valid= false;
++	  past_brk= (PC == sim->brk_stop_addr);
++	}
++
++      if (vcd_break &&
++	  sim->steps_done > 0)
++	{
++	  vcd_break= false;
++	  ret= true;
++	}
++
++      if (!past_brk &&
++	  rom->get_cell_flag(PC, CELL_FETCH_BRK) &&
++	  (brk= fbrk->get_bp(PC, &idx)) &&
++	  brk->do_hit())
++	{
++	  if (brk->perm == brkDYNAMIC)
++	    fbrk->del_bp(PC);
++	  ret= true;
++	}
+     }
+ 
+   return ret;
+diff --git a/ucsim/src/core/utils.src/app.cc b/ucsim/src/core/utils.src/app.cc
+index 60d5768..4268ae3 100644
+--- a/ucsim/src/core/utils.src/app.cc
++++ b/ucsim/src/core/utils.src/app.cc
+@@ -332,7 +332,7 @@ print_help(const char *name)
+ #ifdef SOCKET_AVAIL
+ #define ZOPT "[-z portnum] [-Z portnum]"
+ #define KOPT "[-k portnum]"
+-#define DOPT //"[-d portnum]"
++#define DOPT "[-d portnum]"
+ #else
+ #define ZOPT
+ #define KOPT
+@@ -357,7 +357,7 @@ print_help(const char *name)
+      "  -B           Beep on breakpoints\n"
+      "  -c file      Open command console on `file' (use `-' for std in/out)\n"
+      "  -C cfg_file  Read initial commands from `cfg_file' and execute them\n"
+-   //"  -d portnum   Act as gdbserver, listen on portnum for gdb connections\n"
++     "  -d portnum   Act as gdbserver, listen on portnum for gdb connections\n"
+      "  -e command   Execute command on startup\n"
+      "  -E           Go, start simulation in emulation mode\n"
+      "  -g           Go, start simulation\n"
 diff --git a/ucsim/src/core/utils.src/ddconfig.h b/ucsim/src/core/utils.src/ddconfig.h
 index 49e6a69..e2ea5cc 100644
 --- a/ucsim/src/core/utils.src/ddconfig.h
@@ -2388,7 +2707,7 @@ index 2b302e5..4a6a85c 100644
  	  uc->reset();
 diff --git a/ucsim/src/sims/s51.src/rd2_boot.cc b/ucsim/src/sims/s51.src/rd2_boot.cc
 new file mode 100644
-index 0000000..065ba7a
+index 0000000..b570676
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_boot.cc
 @@ -0,0 +1,426 @@
@@ -2400,7 +2719,7 @@ index 0000000..065ba7a
 + * comes from; the file-level reasoning -- including what is deliberately not
 + * modelled -- is in rd2_bootcl.h.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -2820,7 +3139,7 @@ index 0000000..065ba7a
 +/* End of s51.src/rd2_boot.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_bootcl.h b/ucsim/src/sims/s51.src/rd2_bootcl.h
 new file mode 100644
-index 0000000..ebc9576
+index 0000000..c022c8f
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_bootcl.h
 @@ -0,0 +1,133 @@
@@ -2868,7 +3187,7 @@ index 0000000..ebc9576
 + * every timing measurement in the tree for a delay no test can pin down.  See the
 + * comment at the point of decision in rd2_boot.cc and t/bootrom-report.md.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -2959,7 +3278,7 @@ index 0000000..ebc9576
 +/* End of s51.src/rd2_bootcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_brg.cc b/ucsim/src/sims/s51.src/rd2_brg.cc
 new file mode 100644
-index 0000000..6c64a51
+index 0000000..dccc979
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_brg.cc
 @@ -0,0 +1,147 @@
@@ -2968,7 +3287,7 @@ index 0000000..6c64a51
 + *
 + * AT89C51RD2/ED2 internal Baud Rate Generator; see rd2_brgcl.h for the feature summary.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3112,7 +3431,7 @@ index 0000000..6c64a51
 +/* End of s51.src/rd2_brg.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_brgcl.h b/ucsim/src/sims/s51.src/rd2_brgcl.h
 new file mode 100644
-index 0000000..206b32e
+index 0000000..0fbad8d
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_brgcl.h
 @@ -0,0 +1,51 @@
@@ -3134,7 +3453,7 @@ index 0000000..206b32e
 + * Overflow is published to the UART as EV_OVERFLOW, exactly like cl_stc12_brt does; the
 + * serial model owns the /32 (halved by PCON.SMOD1) and the TBCK/RBCK/SRC routing.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3169,7 +3488,7 @@ index 0000000..206b32e
 +/* End of s51.src/rd2_brgcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_eeprom.cc b/ucsim/src/sims/s51.src/rd2_eeprom.cc
 new file mode 100644
-index 0000000..961f99a
+index 0000000..471e7d1
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_eeprom.cc
 @@ -0,0 +1,262 @@
@@ -3181,7 +3500,7 @@ index 0000000..961f99a
 + * printed p.91, table 25-2 printed p.115) and the decisions on persistence, tWRITE and the
 + * XRAM collision.  All page numbers are PRINTED pages.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3437,7 +3756,7 @@ index 0000000..961f99a
 +/* End of s51.src/rd2_eeprom.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_eepromcl.h b/ucsim/src/sims/s51.src/rd2_eepromcl.h
 new file mode 100644
-index 0000000..e4b3fdc
+index 0000000..0d54a92
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_eepromcl.h
 @@ -0,0 +1,155 @@
@@ -3531,7 +3850,7 @@ index 0000000..e4b3fdc
 + * form is an explicit, default-off option that names the file (nothing loads or flushes
 + * unless the file is named), not a default-on side effect.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3598,7 +3917,7 @@ index 0000000..e4b3fdc
 +/* End of s51.src/rd2_eepromcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_kbd.cc b/ucsim/src/sims/s51.src/rd2_kbd.cc
 new file mode 100644
-index 0000000..b548ffb
+index 0000000..aa3bf72
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_kbd.cc
 @@ -0,0 +1,259 @@
@@ -3608,7 +3927,7 @@ index 0000000..b548ffb
 + * AT89C51RD2/ED2 keyboard interface and its interrupt source; see rd2_kbdcl.h for
 + * the feature summary and the datasheet citations.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3863,7 +4182,7 @@ index 0000000..b548ffb
 +/* End of s51.src/rd2_kbd.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_kbdcl.h b/ucsim/src/sims/s51.src/rd2_kbdcl.h
 new file mode 100644
-index 0000000..bc84f80
+index 0000000..83d80ba
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_kbdcl.h
 @@ -0,0 +1,111 @@
@@ -3896,7 +4215,7 @@ index 0000000..bc84f80
 + * pp.18-19 lists WDX2 PCAX2 SIX2 T2X2 T1X2 T0X2 X2 only), which is why the
 + * detector below is sampled every machine cycle rather than counted.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -3980,7 +4299,7 @@ index 0000000..bc84f80
 +/* End of s51.src/rd2_kbdcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_spi.cc b/ucsim/src/sims/s51.src/rd2_spi.cc
 new file mode 100644
-index 0000000..bf0749c
+index 0000000..826fd22
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_spi.cc
 @@ -0,0 +1,816 @@
@@ -3994,7 +4313,7 @@ index 0000000..bf0749c
 + * clock-control registers are tables 7-1/7-2 on pp. 18-20 and the interrupt system
 + * is section 17 on pp. 72-79.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
@@ -4802,7 +5121,7 @@ index 0000000..bf0749c
 +/* End of s51.src/rd2_spi.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_spiccl.h b/ucsim/src/sims/s51.src/rd2_spiccl.h
 new file mode 100644
-index 0000000..2d2b868
+index 0000000..3d8b57d
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_spiccl.h
 @@ -0,0 +1,123 @@
@@ -4836,7 +5155,7 @@ index 0000000..2d2b868
 + * 0000 0000b, table 16-4 says 00X0 XXXXb) and SPDAT's ("Indeterminate"), both of
 + * which cl_uc89c51rd2::clear_sfr() already resolves to 0x00; that choice is kept.
 + *
-+ * Copyright (C) 2026 CrispStrobe
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
 + * GPL-2.0-or-later
 + */
 +
