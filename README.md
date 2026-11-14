@@ -315,7 +315,8 @@ edge. The fix is three characters per site: update the mirror with `cfg->set()`,
 same value without notifying, exactly as `cl_port::init()` already did at `port.cc:105`. A
 timer-side dedupe was rejected: the two events carry identical payloads, so a subscriber cannot tell
 a doubled edge from two real ones. Pre-existing and device-independent — all three sites are
-byte-identical in upstream v0.9.12 (`/tmp/ucsim-mainline` at `59a14ff9`) — and `t/t2cnttest.py`
+byte-identical in upstream `0.9.12-1-g19d932c3` (`port.cc` is unchanged there since `59a14ff9`,
+so the check holds at both) — and `t/t2cnttest.py`
 (30 legs, 9/30 before the fix) is what pins it.
 
 **(8) The `break` command silently threw away part of what you typed.** `cl_brk_cmd` matches a
@@ -356,6 +357,18 @@ by `t/bpcmdtest.py`. And `-d <portnum>` — the GDB
 remote server port — is back in `--help`: `app.cc` had its option text and the `DOPT` usage string
 commented out while `main()` still parsed it and assigned `rgdb_port`, so a working debugger feature
 was invisible.
+
+**One upstream defect this fork does not carry, and how to un-break 0.9.x.** Upstream HEAD as of
+`19d932c3` SIGSEGVs during startup on every device that builds a PCA — `-t 89C51R` and `-t 251`
+exit 139 before the first prompt — while `-t 51` and `-t 51R` start normally, so the natural
+conclusion that the device names are wrong is false: both are registered and listed by `-H`.
+`cl_hws::add()` (`core/sim.src/hw.cc:610`) calls `item->added_to_uc()` at add time, i.e. before
+the owner's `init()` has run, and `cl_pca::added_to_uc()` (`s51.src/pca.cc:88`) reads the member
+`sfr`, which only `cl_pca::init()` assigns. The four sibling hooks take a local `sfr`; `pca.cc` is
+the only one that does not, because `6e4d431d` ("remove old consts") deleted its local line and let
+the name resolve to the member. This fork is immune only because its 0.8.15 base still has that
+line. Restoring it — one line, `s51.src/pca.cc` — makes all four devices boot and each fire exactly
+one `(104)` at a `break 0x3a`. Bisect: `6e4d431d^` exits 0, `6e4d431d` exits 139.
 
 | file | change |
 |---|---|
