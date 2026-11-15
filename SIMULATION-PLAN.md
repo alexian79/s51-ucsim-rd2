@@ -197,6 +197,19 @@ decoder is a direct interaction to test.
 (`-t 89C51ED2`), gated by `rd2_is_ed2()`; the two names still share one CPU flag, and only this
 feature is split.
 
+### 2.9 Off-chip mechanics — motor, gear train, tach wheel
+
+`rd2_motor.cc` / `rd2_motorcl.h` — **modelled 2026-11-14** (`motor[20]`, reused `HW_TIMER`
+category, Phase 8 item 23). Not silicon: a brushed-DC plant, a gear train with backlash and a
+quadrature tach wheel, as board parts. There is **no SFR and no register** — the plant has no
+addressable side at all. Its inputs are the PWM the MCU already drives (the `pwm_bit` port
+latch, which is what `pca.cc:297-307` writes) and its output is pin edges on the tach port,
+injected through `cl_port::set_pin` so the port itself raises `EV_PORT_CHANGED` and the timer
+counter sees them like any other input. What firmware can see is therefore exactly what a
+sensor gives it: edges. `conf` lists it on `89C51RD2` and `89C51ED2` (21/22 elements) and on
+nothing else — `89C51R`, `251`, `51R` and `52` do not get it, and item 23 explains why, since
+the reason is a core behaviour worth knowing before adding any peripheral.
+
 ---
 
 ## 3. Defects found during this audit
@@ -418,6 +431,34 @@ re-entrant pass `ep.pins == ep.new_pins`, so the emit guard fails. A timer-side 
 because both events carry identical payloads. `t/t2cnttest.py` (30 legs; 9/30 before, the 9 being the
 negative and invariant legs) is the guard, and the fix is upstream-candidate material alongside the
 timer-2 one (`~/s51/upstream/`).
+
+**D16 — the PCA run bit sits on the wrong bit address, so `SETB CR` does nothing.**
+`pca.cc:80-81` registers the `CR` bit cell at **`0xda`**. `CCON` (`D8h`) is bit-addressable with
+`CF CR - CCF4 CCF3 CCF2 CCF1 CCF0` (Table 13-2, `doc4235-spec.md:130`), and `:141` repeats
+"`CR` (CCON.6) run control: set/cleared only by software" — so `CR` is `D8h+6` = **`0xde`**, and
+`0xda` is `CCON.2` = **`CCF2`**. Measured on `-t 89C51R`, one 2-byte image per row, `step 5000`,
+then `dump sfr 0xd8 0xd9` and `dump sfr 0xe9 0xe9`:
+
+```
+MOV  CCON,#0x40   ->  CCON=0x40  CL=0x10   PCA runs            (byte write, legal)
+SETB 0xde         ->  CCON=0x40  CL=0x00   PCA does NOT run    (CR: byte cell set, pca.cc untold)
+SETB 0xda         ->  CCON=0x04  CL=0x0f   PCA runs WRONGLY    (that bit address is CCF2)
+```
+
+Two distinct faults from the one address. (a) Datasheet-correct firmware — `SETB CR` / `CLR CR` —
+starts and stops nothing, which is what made the plant model look dead: its PCA PWM never ran, so
+the duty meter read 0 % and the wheel never turned. (b) Bit access to **`CCF2`**, which firmware
+legitimately `CLR`s after a module-2 capture, toggles the counter's run control instead, so a
+capture-flag clear silently stops the whole PCA. The name table is right (`uc51.cc:468` maps `0xdf`
+to `CF` = CCON.7), which pins this to `pca.cc` rather than to a general bit-space off-by-N. Same
+class of mistake as D15: a hook registered on the address of a *sibling* bit.
+
+Fix: register the cell at `0xde` in `cl_pca::init()` and check the `CF`/`CCFn` bit hooks against the
+same table while there. Guard: `t/motortest.py` carries a leg that asserts today's broken pair
+(bit write inert, byte write live) and is written to **fail loudly with a "delete me" message once
+`pca.cc` is fixed**, so the defect can be neither silently re-introduced nor silently forgotten.
+Until then the motor suite drives the PCA with the byte form `MOV CCON,#0x40`, which is legal on
+the real part, and says so in a comment.
 
 ### 3.1 Ruled out while auditing the datasheet — do not "fix" these
 
@@ -1122,7 +1163,90 @@ array at `FFF0h`, which is what makes the ID and window legs unable to have pass
     adjudicated: `t/t2cnttest.py`'s T0/T1 legs assert one count per full toggle, so they hold either
     way. Needs the Atmel hardware manual's counter-edge statement before anything changes.
 
+### Phase 8 — board-level mechanics (2026-11-14)
+
+23. Motor + gear + tach wheel as a `cl_hw` plant (`rd2_motor.cc`, `motor[20]`), so the ucsim
+    core can be the physics host for a closed control loop instead of only the CPU. Pinned:
+    - **Torque domain, not the first-order shortcut.** Drive torque is the linear PM-DC form
+      `T_stall * (duty - |w|/w_max)`, so the two knobs are the two the datasheets print
+      (stall torque, no-load speed), and it goes negative at `duty = 0`, which *is* dynamic
+      braking by a shorted driver. Opposing it: Coulomb friction with a separate static
+      (break-away) threshold, viscous drag, and a load torque with a mode bit — `drag`
+      (always opposes motion) or `gravity` (fixed direction, so it can run the shaft
+      backwards). The gravity mode plus static friction is the whole point: with
+      `load_torque < static_friction` the plant **holds** (`held=yes`, zero edges) and above it
+      it **runs away**, which is the capability the QEMU `pwm_motor.c` reference states it
+      lacks ("no Coulomb friction… never holds against a load torque"). Measured on
+      `89C51R` at default cfg: `duty=100 %` → `506.199 rpm`; drive 0 with `load=900 mode=gravity`
+      → `-453.470 rpm dir=rev`, edges still flowing; `load=30` → `0.000 rpm held=yes
+      pulses=0`; `load=70` → breaks away to `-15.819 rpm`.
+    - **Machine cycles are the only time base.** Every constant is cycle-domain, so results
+      cannot depend on `-X freq` or on `X2`; `rpm` is printed only because the clock is
+      discoverable, and `cycles/rev` is the unit-free ground truth.
+    - **The tach output is a full square wave per slot, not a level.** `cl_timer0::happen`
+      counts `pins & latch` on a **rising** edge while timer 2 / PCA / the interrupt layer use
+      the falling edge, which is item 22 above and still unadjudicated. Emitting both edges
+      makes the count identical whichever way that is settled, matching the convention
+      `t/t2cnttest.py` already uses (one count per full toggle). Quadrature follows: measured
+      gray code `00→10→11→01` forward, `00→01→11→10` reverse, so the direction channel a real
+      encoder gives is there for firmware to read on B.
+    - **`floor` is reported, never inferred.** Below a speed floor the pins are released and no
+      edges come out — a tach wheel's own resolution limit. Firmware measuring "no edges"
+      must not conclude "no motion"; the leg asserts `floor=yes`.
+    - **Register trap:** P1 comes out of reset at `0xff`, so an unconfigured `pwm_bit` reads as
+      **100 % duty** and a leg expecting rest sees ~490 rpm. Clearing the drive bit is part of
+      every leg's setup.
+    - **Element name is bare in the console**: `info hw motor`, `reset motor`,
+      `set hardware motor off`; `info hw motor20` silently falls through to the
+      `info hardware category` usage text. Parameters live in `motor_20_cfg` and are read with
+      `dump motor_20_cfg 0x00 0x15` (it prints each variable's name) and written with
+      `set mem motor_20_cfg <slot> <value>`. `var <name> <value>` must never be used for this:
+      it *creates/rebinds* a variable (`help var`) instead of writing the cell.
+    - **Gated on `CPU_89C51RD2`, not on `rd2_mem()`** — a real correction, not a tidy-up.
+      `rd2_mem()` also covers the RB2/RC2 (its own comment says an RD2-only feature must test
+      the flag alone), so the plant first appeared on `89C51R` as well and `t/ident89c51r.py`
+      fell from 36/36 to **0/36**. The transcripts contained no behavioural difference at all:
+      every diff was the value column sliding right, because the core pads `dump`/`info reg` to
+      the **longest registered name anywhere**, and the plant publishes 22 `motor20_*`
+      variables (`motor20_static_friction` is 23 characters). Any peripheral with a long
+      per-instance name therefore reflows unrelated output on every device that carries it — a
+      hazard for any byte-identity suite, and not a defect in the plant. Restricting the gate
+      to the two parts doc4235 documents put `89C51R` back to 16 elements, brought
+      `ident89c51r` back to 36/36, and left **every** stored baseline untouched: neither
+      `89C51RD2` nor `89C51ED2` has a baseline file (`-H` lists 58 device names,
+      `test/config/baseline` ships 14). That also removed the need to rebaseline `89C51R` at
+      all — and rebaselining it would have been wrong regardless: the file is already stale
+      against this fork by ~130 lines (the XRS 1792-byte window, `banks=2` → `banks=16`,
+      `eram_chip` → `eram1792_chip`) and its `info reg` line prints *uninitialised* memory, so
+      a regenerated copy would bake machine-specific allocator garbage into a counted gate.
+      Old-vs-new binaries diff **0 lines** on all 14 config devices apart from the motor row.
+    - **Suite: `t/motortest.py`, 48 checks, green**, registered in `t/floor.sh`. Firmware, not
+      the console, closes the loop: hand-assembled images park the plant, settle two duty
+      windows, wait on an IRAM arm flag, then run a T0-overflow window while **T1 counts the
+      wheel as a counter on T1/P3.5**, and the leg compares firmware's own readings against
+      `info hw motor`. Headline numbers: `TL1:TH1 = 530` against `pulses = 530`; firmware
+      `cycles/rev` within 0.5–0.95 % of the model at every duty; `end=0 ovs=20
+      elapsed=1310732` for a 20-overflow window; `held=yes pulses=0` under stiction; `dir=rev`
+      with `pulses=330` at duty 0 under gravity; and the gear legs show `out` frozen while the
+      slack is open with slack never exceeding its setting. Leg 0 checks the mini-assembler
+      against the bed's own disassembler, because the assembler is part of the measurement and
+      no C++ gate covers it: three fictions were living in it (`0xC0` is PUSH direct, not
+      `SWAP A`; `0x25` is `ADD A,direct`; there is no `JNZ direct` at all), plus a label must
+      not consume a byte and `rel = target - (pc + 1)`, not `pc + 2`. It also caught
+      `t/kbdtest.py`'s deadline byte `0xd7` (= XCHD) where its own comment said `DJNZ`, so that
+      suite's "~510 cycle" deadline never actually waited; it now carries the R7 form
+      (`7f ff df fe`) and still reports 30/30.
+    - **Open, deliberately not smoothed over — two items.** (a) leg C's polled quadrature
+      decoder counts 21 transitions for a wheel that T1 and the model agree is 646; ruled out
+      are the plant (C2d agrees to one edge), pin visibility (bit-addressed reads see the level
+      low in 39 % of samples), placement (the `LCALL` is the last thing before the deadline
+      `djnz`) and the latch-vs-pin effect — so the deficit is unexplained, and `C2c` asserts
+      direction purity only. (b) `A-CRBIT` pins **D16** (PCA `CR` registered at `0xda` = CCF2:
+      `SETB CR` is inert on the datasheet's own spelling while `CLR CCF2` stops the PCA), so
+      the suite starts the PCA with `MOV CCON,#0x40` and that leg is written to fail loudly —
+      naming itself for deletion — the moment `pca.cc` is fixed.
 ---
+
 
 ## 5. Verification rules these phases inherit
 
@@ -1302,26 +1426,6 @@ Standard, `Fosc` in X2); reading `FPER` as `Fosc/12` misses by 6× and 12×.
   The floor exists because retyping the list is how suites get skipped. Excluded deliberately:
   `langtest`/`rmwtest`, which start a headless Ghidra and must run one at a time, and `xcompare`,
   which starts no Ghidra but writes a fixed `/tmp/xval.ihx`.
-
-- **A console pipeline's timeout has to kill the process group, not the shell.** Every suite that has
-  to survive `run` freezing the console feeds it through `( printf … ; sleep 1 ) | ucsim_51 -c -`,
-  which puts the simulator in the **child** of `sh`. `subprocess.run(timeout=…)` kills the shell and
-  leaves the simulator reparented to init. It cannot be reaped by closing its stdin either: EOF only
-  reaches a console that is *waiting for a command* (verified — `pc` then EOF exits 0 in 0.02 s), while
-  a core sitting in `run` never polls stdin at all, so a sled jumps to itself forever at 100 % CPU
-  (verified — `run` then EOF was still burning when `timeout -s KILL` took it at 5 s). `wptrtest`'s
-  control leg is exactly this session by design — a watchpoint that never fires leaves the sled
-  running, and "killed" *is* the leg's evidence — so **every floor run stranded one spinning core**.
-  The fix is `t/simproc.py:run_pipe`, which
-  starts the shell in its own session and SIGKILLs the whole group; new console pipelines go through it
-  and never through `subprocess.run`. Audit after any run with `ps -eo pid,ppid,args | awk '$2==1 &&
-  /89C51/'`, which must print nothing — and match on the **device argument**, never on a binary name:
-  the first audit here matched `/ucsim/` and so silently missed eleven consoles that hand-run probes
-  had left against the unpatched control build `/tmp/s51-bed-base`, which is not named anything like
-  `ucsim`. Counting them in, 44 reparented consoles were burning when the machine was finally checked.
-  The audit is not left to anyone's memory: `t/floor.sh` counts PPID-1 consoles after the suites and
-  fails the floor as `process-leak(N)` when it finds one, which is also where a hand-run probe that
-  leaks gets caught — the floor is the thing that runs after them.
 
 - **A suite that has been red for a long time is usually a stale expectation, not a broken model —
   but only after the model has been re-read against the primary source.** `irctest` sat at 48/50 for

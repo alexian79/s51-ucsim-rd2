@@ -172,7 +172,7 @@ def run(code, cmds, name="k", chip=CHIP, timeout=TIMEOUT):
 # The deadline is what makes every run finite on a binary that has no keyboard source
 # at all: that breakpoint is always reachable.
 
-DEADLINE = bytes([0x7d, 0xff, 0xd7, 0xfe])       # MOV R7,#0xff ; DJNZ R7,$
+DEADLINE = bytes([0x7f, 0xff, 0xdf, 0xfe])       # MOV R7,#0xff ; DJNZ R7,$
 
 
 def image(setup, isr=b"", isr_at=VECTOR, pad_to=0x40):

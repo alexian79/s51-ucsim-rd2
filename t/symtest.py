@@ -73,11 +73,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from simproc import run_pipe
 
-S51 = os.environ.get("S51") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+S51 = os.environ.get("S51") or HERE
 SIM = os.environ.get("S51_SIM") or os.path.join(
     S51, "vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
-IMG = os.path.join(S51, "t", "isa.ihx")
-T = os.path.join(S51, "t")
+IMG = os.path.join(HERE, "t", "isa.ihx")   # fixtures live beside the suite
+T = os.path.join(HERE, "t")
 
 
 def fixture(name):

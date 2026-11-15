@@ -1327,7 +1327,7 @@ index 185f502..ec487c1 100644
      /* CCF0: enabled by CCAPM0 bit 0 (ECCF0) */
      uc->it_sources->add(is= new cl_it_src(uc, 0x40,
 diff --git a/ucsim/src/sims/s51.src/objs.mk b/ucsim/src/sims/s51.src/objs.mk
-index a3daf82..2475048 100644
+index a3daf82..fc357cb 100644
 --- a/ucsim/src/sims/s51.src/objs.mk
 +++ b/ucsim/src/sims/s51.src/objs.mk
 @@ -8,5 +8,6 @@ OBJECTS		= glob.o sim51.o s51.o \
@@ -1336,7 +1336,7 @@ index a3daf82..2475048 100644
                    ucstc12.o stc12_timer.o stc12_adc.o stc12_port.o stc12_pca.o stc12_wdt.o \
 -                  stc12_brt.o stc15_timer2.o
 +                  stc12_brt.o stc15_timer2.o rd2_brg.o rd2_kbd.o rd2_spi.o rd2_boot.o \
-+                  rd2_eeprom.o
++                  rd2_eeprom.o rd2_motor.o
  
 diff --git a/ucsim/src/sims/s51.src/pca.cc b/ucsim/src/sims/s51.src/pca.cc
 index 75664da..b7faffb 100644
@@ -3163,6 +3163,1074 @@ index 0000000..83d80ba
 +#endif
 +
 +/* End of s51.src/rd2_kbdcl.h */
+diff --git a/ucsim/src/sims/s51.src/rd2_motor.cc b/ucsim/src/sims/s51.src/rd2_motor.cc
+new file mode 100644
+index 0000000..ea81343
+--- /dev/null
++++ b/ucsim/src/sims/s51.src/rd2_motor.cc
+@@ -0,0 +1,829 @@
++/*
++ * Simulator of microcontrollers (rd2_motor.cc)
++ *
++ * Rotary plant model -- brushed DC motor, gear train, quadrature tach wheel -- for the
++ * AT89C51RD2/ED2 bench; see rd2_motorcl.h for the pin map, the unit system, the torque law
++ * and every decision that the datasheet cannot make for you.
++ *
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
++ * GPL-2.0-or-later
++ */
++
++#include <math.h>
++#include <stdio.h>
++#include <string.h>
++
++#include "rd2_motorcl.h"
++#include "regs51.h"
++#include "portcl.h"
++
++/* Speed unit of the integrator: 2^-20 revolutions per machine cycle, i.e. the unit the
++   wmax_q slot is declared in.  See the header for why it is the only one under which the
++   contract's w += T/J law is stable at the default parameters. */
++#define MOTOR_Q20 1048576.0
++
++/* Below this speed (Q20 units per cycle) the wheel is not emitting: the period would be
++   over a million cycles per notch, and a shaft that slow is a shaft that is stopped as far
++   as a counter is concerned.  Both pins are released to the pull-up instead of being driven
++   low, and `released' counts the cycles. */
++#define MOTOR_FLOOR_Q 1.0
++
++/* Boundary loop cap.  At wmax_q the wheel advances ~1e-5 rev per cycle against a notch of
++   1/slots rev, so one boundary per cycle is the most any sane parameterisation can produce;
++   the guard is only there so a pathological configuration cannot livelock tick(). */
++#define MOTOR_EDGE_GUARD 64
++
++/* Longest tach period that fits the int countdowns without overflow. */
++#define MOTOR_PERIOD_MAX 2.0e9
++
++
++cl_rd2_motor::cl_rd2_motor(class cl_uc *auc, int aid):
++  /* HW_TIMER is a reused category -- there is no HW_MOTOR and adding one to enum hw_cath
++     touches a core header -- and id 20 is claimed against rd2_brgcl.h:30 (13),
++     rd2_kbdcl.h:47 (14), rd2_spiccl.h:50 (15), rd2_bootcl.h:63 (16) and
++     rd2_eepromcl.h:109 (17) plus the upstream 0/1/2 timers, 3 BRT, 10 ADC, 11 WDT, 12 STC15
++     timer 2.  Documented here because serial.cc-style dispatch switches on this id space:
++     an id collision would silently re-route somebody's clock, and `info hw` resolves by
++     name, so no suite would ever notice. */
++  cl_hw(auc, HW_TIMER /* reuse category */, aid, "motor")
++{
++  cell_pwm= 0;
++  cell_tach= 0;
++  port_a= 0;
++  port_b= 0;
++  pwm_port_nr= -1;
++  tach_a_nr= -1;
++  tach_b_nr= -1;
++  pos= 0.0;
++  w_q= 0.0;
++  edge_pos= 0.0;
++  w_sign= 0;
++  duty= 0.0;
++  duty_high= 0;
++  duty_cycles= 0;
++  duty_permille= 0;
++  held= true;
++  pulses= 0;
++  emitted= 0;
++  clamped= 0;
++  released= 0;
++  floor_reached= true;
++  out_pos= 0.0;
++  out_target= 0.0;
++  slack= 0.0;
++  out_side= 0;
++  memset((void *)&cha, 0, sizeof(cha));
++  memset((void *)&chb, 0, sizeof(chb));
++  /* The released level is a pull-up high, so that is the level the pins start and idle at. */
++  cha.level= 1;
++  chb.level= 1;
++  cha.rise_in= -1;
++  chb.rise_in= -1;
++}
++
++int
++cl_rd2_motor::init(void)
++{
++  /* cl_hw::init() first: it sets on, creates the motor_20_cfg space and registers motor20_on,
++     which is what `set hardware motor off' and the tick gate in cl_uc::tick_hw() consult
++     (pattern doc 1.3; cl_stc12_brt, which never chains, is the defect to avoid). */
++  cl_hw::init();
++
++  /* Slot defaults.  They cannot live in the ctor: cl_hw's ctor leaves cfg == 0 (hw.cc:47-71)
++     and cfg_set() dereferences it (hw.cc:196-200), so the space has to exist first -- which
++     is also where cl_serial_hw and cl_port set theirs.  Slot 0 (`on') is not set: cl_hw::init()
++     has already made it true. */
++  cfg_set(motor_cfg_pwm_port, 1);          /* P1, the port CEX0 lives on */
++  cfg_set(motor_cfg_pwm_bit, 3);           /* P1.3 = CEX0, doc4235K pin table p.35 */
++  cfg_set(motor_cfg_pwm_invert, 0);
++  cfg_set(motor_cfg_pwm_window, 4096);     /* machine cycles == 16 PWM periods */
++  cfg_set(motor_cfg_slots, 60);
++  cfg_set(motor_cfg_tach_a_port, 3);
++  cfg_set(motor_cfg_tach_a_bit, 5);        /* P3.5 = T1, regs51.h bmT1 */
++  cfg_set(motor_cfg_tach_b_port, 3);
++  cfg_set(motor_cfg_tach_b_bit, 4);        /* P3.4 = T0 */
++  cfg_set(motor_cfg_torque_stall, 1000);
++  cfg_set(motor_cfg_wmax_q, 10);
++  cfg_set(motor_cfg_inertia_motor, 1000);
++  cfg_set(motor_cfg_inertia_load, 0);
++  cfg_set(motor_cfg_gear_x1000, 1000);
++  cfg_set(motor_cfg_backlash_x1000, 0);
++  cfg_set(motor_cfg_coulomb, 40);
++  cfg_set(motor_cfg_static_friction, 60);
++  cfg_set(motor_cfg_viscous_x1000, 100);
++  cfg_set(motor_cfg_load_torque, 0);
++  cfg_set(motor_cfg_load_mode, 0);
++  cfg_set(motor_cfg_period_min, 4);
++
++  retune();
++
++  /* Publish every slot as motor20_<name>, the per-instance idiom of
++     core/sim.src/serial_hw.cc:229-237, so `set motor20_gear_x1000 4000' works and the values
++     are visible in `info var'.  Slot 0 is deliberately skipped: cl_hw::init() has already
++     registered motor20_on (hw.cc:107-111), and cl_var_list::add() deletes an existing binding
++     of the same name instead of coexisting with it (pattern doc 5), which would replace the
++     one binding that the tick gate is documented against.  31:0 because the cfg cells are
++     cl_chip32, so a 7:0 mask would hide every value above 255. */
++  if (uc->vars)
++    {
++      chars pn= chars("", "%s%d_", id_string, id);
++      uc->vars->add(pn+"pwm_port", cfg, motor_cfg_pwm_port, 31, 0,
++                    cfg_help(motor_cfg_pwm_port));
++      uc->vars->add(pn+"pwm_bit", cfg, motor_cfg_pwm_bit, 31, 0,
++                    cfg_help(motor_cfg_pwm_bit));
++      uc->vars->add(pn+"pwm_invert", cfg, motor_cfg_pwm_invert, 31, 0,
++                    cfg_help(motor_cfg_pwm_invert));
++      uc->vars->add(pn+"pwm_window", cfg, motor_cfg_pwm_window, 31, 0,
++                    cfg_help(motor_cfg_pwm_window));
++      uc->vars->add(pn+"slots", cfg, motor_cfg_slots, 31, 0,
++                    cfg_help(motor_cfg_slots));
++      uc->vars->add(pn+"tach_a_port", cfg, motor_cfg_tach_a_port, 31, 0,
++                    cfg_help(motor_cfg_tach_a_port));
++      uc->vars->add(pn+"tach_a_bit", cfg, motor_cfg_tach_a_bit, 31, 0,
++                    cfg_help(motor_cfg_tach_a_bit));
++      uc->vars->add(pn+"tach_b_port", cfg, motor_cfg_tach_b_port, 31, 0,
++                    cfg_help(motor_cfg_tach_b_port));
++      uc->vars->add(pn+"tach_b_bit", cfg, motor_cfg_tach_b_bit, 31, 0,
++                    cfg_help(motor_cfg_tach_b_bit));
++      uc->vars->add(pn+"torque_stall", cfg, motor_cfg_torque_stall, 31, 0,
++                    cfg_help(motor_cfg_torque_stall));
++      uc->vars->add(pn+"wmax_q", cfg, motor_cfg_wmax_q, 31, 0,
++                    cfg_help(motor_cfg_wmax_q));
++      uc->vars->add(pn+"inertia_motor", cfg, motor_cfg_inertia_motor, 31, 0,
++                    cfg_help(motor_cfg_inertia_motor));
++      uc->vars->add(pn+"inertia_load", cfg, motor_cfg_inertia_load, 31, 0,
++                    cfg_help(motor_cfg_inertia_load));
++      uc->vars->add(pn+"gear_x1000", cfg, motor_cfg_gear_x1000, 31, 0,
++                    cfg_help(motor_cfg_gear_x1000));
++      uc->vars->add(pn+"backlash_x1000", cfg, motor_cfg_backlash_x1000, 31, 0,
++                    cfg_help(motor_cfg_backlash_x1000));
++      uc->vars->add(pn+"coulomb", cfg, motor_cfg_coulomb, 31, 0,
++                    cfg_help(motor_cfg_coulomb));
++      uc->vars->add(pn+"static_friction", cfg, motor_cfg_static_friction, 31, 0,
++                    cfg_help(motor_cfg_static_friction));
++      uc->vars->add(pn+"viscous_x1000", cfg, motor_cfg_viscous_x1000, 31, 0,
++                    cfg_help(motor_cfg_viscous_x1000));
++      uc->vars->add(pn+"load_torque", cfg, motor_cfg_load_torque, 31, 0,
++                    cfg_help(motor_cfg_load_torque));
++      uc->vars->add(pn+"load_mode", cfg, motor_cfg_load_mode, 31, 0,
++                    cfg_help(motor_cfg_load_mode));
++      uc->vars->add(pn+"period_min", cfg, motor_cfg_period_min, 31, 0,
++                    cfg_help(motor_cfg_period_min));
++    }
++  return 0;
++}
++
++unsigned int
++cl_rd2_motor::cfg_size(void)
++{
++  return RD2_MOTOR_CFG_SIZE;
++}
++
++const char *
++cl_rd2_motor::cfg_help(t_addr addr)
++{
++  switch ((enum rd2_motor_cfg)addr)
++    {
++    case motor_cfg_on: return "Turn/get on/off state (bool, RW)";
++    case motor_cfg_pwm_port: return "Port carrying the drive PWM (int, RW; 1=P1)";
++    case motor_cfg_pwm_bit: return "Drive PWM bit of that port (int, RW; 3=P1.3=CEX0)";
++    case motor_cfg_pwm_invert: return "1 = drive is active-low (bool, RW)";
++    case motor_cfg_pwm_window: return "Duty measurement window in MACHINE cycles (int, RW)";
++    case motor_cfg_slots: return "Tach pulses per motor revolution on channel A (int, RW)";
++    case motor_cfg_tach_a_port: return "Port of tach channel A (int, RW; 3=P3)";
++    case motor_cfg_tach_a_bit: return "Bit of tach A; 5=P3.5=T1 counter input (int, RW)";
++    case motor_cfg_tach_b_port: return "Port of tach channel B (int, RW; 3=P3)";
++    case motor_cfg_tach_b_bit: return "Bit of tach B; 4=P3.4, quadrature (int, RW)";
++    case motor_cfg_torque_stall: return "Drive torque at 100% duty (int, RW)";
++    case motor_cfg_wmax_q: return "No-load speed in 2^-20 rev/cycle (int, RW)";
++    case motor_cfg_inertia_motor: return "Rotor inertia, torque*cycle^2 per 2^-20 rev (int, RW)";
++    case motor_cfg_inertia_load: return "Load inertia, reflected to the motor by the gear (int, RW)";
++    case motor_cfg_gear_x1000: return "Output reduction N x1000, N>=1 (int, RW)";
++    case motor_cfg_backlash_x1000: return "Backlash at the output in degrees x1000 (int, RW)";
++    case motor_cfg_coulomb: return "Kinetic (Coulomb) friction torque (int, RW)";
++    case motor_cfg_static_friction: return "Break-away torque, clamped up to coulomb (int, RW)";
++    case motor_cfg_viscous_x1000: return "Viscous torque = x/1000 * |w|/wmax (int, RW)";
++    case motor_cfg_load_torque: return "External load torque (int, RW)";
++    case motor_cfg_load_mode: return "0=drag, opposes motion; 1=fixed direction, can drive the shaft backwards (int, RW)";
++    case motor_cfg_period_min: return "Minimum tach period in cycles, the edge clamp (int, RW)";
++    }
++  return cl_hw::cfg_help(addr);
++}
++
++/*
++ * `on' is the only slot with behaviour of its own; it is handled exactly the way
++ * cl_port::conf_op handles port_on (port.cc:204-216), which is what the tick gate reads.
++ * Re-resolving the wiring on every write is deliberate: the port numbers are configuration,
++ * so `set motor20_tach_a_port 1' between two runs must not leave the plant driving a port it
++ * no longer belongs to.
++ */
++t_mem
++cl_rd2_motor::conf_op(cl_memory_cell *cell, t_addr addr, t_mem *val)
++{
++  switch ((enum rd2_motor_cfg)addr)
++    {
++    case motor_cfg_on:
++      if (val)
++        {
++          if (*val)
++            on= true;
++          else
++            on= false;
++        }
++      else
++        {
++          cell->set(on ? 1 : 0);
++        }
++      break;
++    default:
++      break;
++    }
++  if (val)
++    retune();
++  return cl_hw::conf_op(cell, addr, val);
++}
++
++/*
++ * cfg slots are unsigned 32-bit cells; every physical parameter here is a small non-negative
++ * integer, but a user who writes -1 must not get 4294967295 out of the physics.  Reading a
++ * slot as signed is the smaller surprise, and it costs nothing.
++ */
++long
++cl_rd2_motor::cfg_at(int slot)
++{
++  t_mem v;
++
++  if (!cfg || slot < 0 || (unsigned int)slot >= RD2_MOTOR_CFG_SIZE)
++    return 0;
++  v= cfg->get((t_addr)slot) & 0xffffffff;
++  if (v >= 0x80000000UL)
++    return -((long)(0xffffffffUL - v) + 1L);
++  return (long)v;
++}
++
++/*
++ * Re-resolve the latch cells and the two port elements from the cfg port numbers.  get_hw()
++ * is a linear scan over the element list, so this runs on cfg writes and on a port number
++ * change, never once per cycle.  A port number outside 0..3 leaves the corresponding cell or
++ * port null and the element then simply has nothing to drive -- which print_info reports as
++ * the WARN line rather than inventing a pin.
++ */
++void
++cl_rd2_motor::retune(void)
++{
++  class cl_address_space *sfr;
++  t_addr latch[4]= { P0, P1, P2, P3 };
++  int p;
++
++  if (!uc)
++    return;
++  sfr= uc->address_space(MEM_SFR_ID);
++
++  p= (int)cfg_at(motor_cfg_pwm_port);
++  if (p != pwm_port_nr)
++    {
++      pwm_port_nr= p;
++      cell_pwm= (sfr && p >= 0 && p <= 3) ? sfr->get_cell(latch[p]) : 0;
++    }
++  p= (int)cfg_at(motor_cfg_tach_a_port);
++  if (p != tach_a_nr)
++    {
++      tach_a_nr= p;
++      cell_tach= (sfr && p >= 0 && p <= 3) ? sfr->get_cell(latch[p]) : 0;
++      port_a= (p >= 0 && p <= 3) ? uc->get_hw(HW_PORT, p, 0) : 0;
++    }
++  p= (int)cfg_at(motor_cfg_tach_b_port);
++  if (p != tach_b_nr)
++    {
++      tach_b_nr= p;
++      port_b= (p >= 0 && p <= 3) ? uc->get_hw(HW_PORT, p, 0) : 0;
++    }
++}
++
++/* J_L/N^2 with N = gear_x1000/1000, i.e. inertia_load * 1e6 / gear_x1000^2.  A reduction
++   below 1:1 is not a gear this model supports (the contract fixes N >= 1) and a zero or
++   negative inertia would divide by itself, so both are clamped rather than guessed at. */
++double
++cl_rd2_motor::j_eff(void)
++{
++  double gear= (double)cfg_at(motor_cfg_gear_x1000);
++  double j= (double)cfg_at(motor_cfg_inertia_motor);
++  double jl= (double)cfg_at(motor_cfg_inertia_load);
++
++  if (gear < 1000.0)
++    gear= 1000.0;
++  j+= jl * 1.0e6 / (gear * gear);
++  if (j < 1.0)
++    j= 1.0;
++  return j;
++}
++
++/*
++ * One machine cycle of Newton's law, in RD2_MOTOR_SUBSTEPS substeps.
++ *
++ * The substepping is not needed by the defaults -- with torque_stall=1000, wmax_q=10 and
++ * J_eff=1000 the linear part has a loop gain of 0.1 per cycle, so plain Euler converges with
++ * a factor of 0.9 and cannot oscillate.  It is there for the configurations a user can type:
++ * a stall torque of 10000 against wmax_q=1 and inertia 1 is a loop gain of 10000 per cycle,
++ * which Euler resolves into a diverging 2-cycle oscillation.  Eight substeps buy three
++ * orders of margin for one eigth of the arithmetic per step, and the step size is fixed so
++ * the trajectory stays reproducible.
++ *
++ * Stiction is a real branch and not a damping trick: while the shaft is at zero, static
++ * friction is asked whether it can hold the net torque, and if it can, the rest of the
++ * substeps are skipped because nothing is moving.  Drag (load_mode 0) helps hold the shaft,
++ * because a load that opposes motion resists the tendency to start; gravity (load_mode 1)
++ * does not, because its direction is fixed and it is the thing the hold has to fight.
++ */
++void
++cl_rd2_motor::integrate(void)
++{
++  double K= (double)cfg_at(motor_cfg_torque_stall);
++  double wmax= (double)cfg_at(motor_cfg_wmax_q);
++  double coul= (double)cfg_at(motor_cfg_coulomb);
++  double stat= (double)cfg_at(motor_cfg_static_friction);
++  double visc= (double)cfg_at(motor_cfg_viscous_x1000) / 1000.0;
++  double load= (double)cfg_at(motor_cfg_load_torque);
++  long mode= cfg_at(motor_cfg_load_mode);
++  double J= j_eff();
++  int s;
++
++  if (coul < 0.0)
++    coul= 0.0;
++  if (stat < coul)                    /* contract: break-away below kinetic is clamped up */
++    stat= coul;
++  if (wmax < 1.0)
++    wmax= 1.0;                        /* wmax_q is the denominator of both the back-EMF and wn */
++  if (visc < 0.0)
++    visc= 0.0;
++
++  for (s= 0; s < RD2_MOTOR_SUBSTEPS; s++)
++    {
++      double wn= w_q / wmax;          /* speed normalised to no-load: 1.0 == wmax_q */
++      double Td= K * (duty - wn);     /* signed w: the back-EMF term always opposes the shaft */
++      double T;
++      double nw;
++
++      if (w_q == 0.0)
++        {
++          double tend= (Td >= 0.0) ? 1.0 : -1.0;
++          double L= (mode == 0) ? load * tend : load;
++          double net= Td - L;
++          if (fabs(net) <= stat)
++            {
++              held= true;             /* stiction holds: the shaft stays at zero */
++              return;
++            }
++          held= false;
++          T= net - coul * ((net > 0.0) ? 1.0 : -1.0);
++        }
++      else
++        {
++          double sw= (w_q > 0.0) ? 1.0 : -1.0;
++          double L= (mode == 0) ? load * sw : load;
++          held= false;
++          T= Td - (coul * sw + visc * wn + L);
++        }
++      nw= w_q + T / (J * (double)RD2_MOTOR_SUBSTEPS);
++      /* Braked through zero: stiction re-arrests the shaft instead of letting it flip sign
++         inside one substep, and the static branch above decides next substep whether it
++         breaks away again.  Without this a Coulomb term cannot be satisfied at all: kinetic
++         friction changes sign with the velocity it is opposing, so an uncommitted step over
++         zero would chatter forever. */
++      if (w_q != 0.0 && ((w_q > 0.0) != (nw > 0.0)))
++        nw= 0.0;
++      w_q= nw;
++    }
++}
++
++/*
++ * The duty meter.  It samples the drive bit of the port's LATCH cell with get(), never
++ * through the port's read hook: the input of a motor driver is what the chip outputs, and
++ * cl_pca::do_pca_module drives the PWM exactly that way (pca.cc:297-307 writes the P1 latch
++ * with sfr->set, which does not move port_pins and does not raise EV_PORT_CHANGED).  Reading
++ * cell->read() here would return latch & port_pins and let a bench pulling the pin down look
++ * like a lower duty.
++ *
++ * The window is counted in machine cycles, which is the unit the contract fixes for it and
++ * the unit tick() is handed.  Because the accumulator is only published when a whole window
++ * has completed, the value firmware acts on has the latency a real duty meter has -- which is
++ * why t/motortest.py settles for two windows before it measures.
++ */
++void
++cl_rd2_motor::measure_duty(void)
++{
++  long win= cfg_at(motor_cfg_pwm_window);
++  int bit= (int)cfg_at(motor_cfg_pwm_bit);
++  long lvl;
++
++  if (win < 1)
++    win= 1;
++  if (bit < 0 || bit > 7)
++    bit= 3;
++  lvl= cell_pwm ? (long)((cell_pwm->get() >> bit) & 1) : 0;
++  if (cfg_at(motor_cfg_pwm_invert))
++    lvl= lvl ? 0 : 1;
++  if (lvl)
++    duty_high++;
++  duty_cycles++;
++  if (duty_cycles >= win)
++    {
++      duty= (double)duty_high / (double)win;
++      duty_permille= (long)(1000.0 * (double)duty_high / (double)win + 0.5);
++      duty_high= 0;
++      duty_cycles= 0;
++    }
++}
++
++/*
++ * Drive one bit of a port's pins through that port's own cfg space.
++ *
++ * cfg_read(port_pin) is the port's own answer for its pins -- cl_port::conf_op sets the cell
++ * to port_pins on a read (port.cc:217-222) -- and cfg_write(port_pin) is the route that
++ * reaches cl_port::set_pin() and therefore emits EV_PORT_CHANGED with the new pins
++ * (port.cc:237-254), which is what cl_timer0::happen() counts.  cfg_set() would look like the
++ * natural call and is wrong: it funnels into cl_memory::set, which writes the cell without
++ * running the hw operators (mem.cc:1261-1271), so conf_op never runs and no counter ever sees
++ * anything.  Nothing here touches the latch: the wheel drives pins, and the latch stays
++ * firmware's (the WARN line is what reports a latch that hides the pins).
++ */
++void
++cl_rd2_motor::drive_pin(class cl_hw *ph, int bit, int level)
++{
++  t_mem cur, want, m;
++
++  if (!ph || bit < 0 || bit > 7)
++    return;
++  m= (t_mem)1 << bit;
++  cur= ph->cfg_read(port_pin) & 0xff;
++  want= (cur & ~m) | (level ? m : 0);
++  if (want != cur)
++    ph->cfg_write(port_pin, want);
++}
++
++/* Both channels released: an open-collector wheel with a pull-up reads high, and a pin left
++   low at the moment the shaft stops would look like a permanent edge condition. */
++void
++cl_rd2_motor::release_pins(void)
++{
++  if (cha.level != 1)
++    {
++      cha.level= 1;
++      drive_pin(port_a, (int)cfg_at(motor_cfg_tach_a_bit), 1);
++    }
++  if (chb.level != 1)
++    {
++      chb.level= 1;
++      drive_pin(port_b, (int)cfg_at(motor_cfg_tach_b_bit), 1);
++    }
++}
++
++/*
++ * Arm one channel for the wave this boundary produces.
++ *
++ * delay is when the channel's rising edge is owed: 0 for the leading channel, a quarter
++ * period for the lagging one.  Which of A and B leads is decided by the caller from the SIGN
++ * of w, and that is the whole of the direction information firmware can recover: for w>0 A
++ * leads B, for w<0 B leads A, so the quadrature order reverses.  Cancelling the pending fall
++ * is what makes the wave self-correcting when the speed rises inside one notch and the next
++ * boundary arrives before the previous wave has finished; step_ch() then forces the low and
++ * rises a cycle later, so every boundary still produces exactly one rising edge and `emitted'
++ * stays equal to `pulses'.
++ */
++void
++cl_rd2_motor::arm(struct rd2_tach_ch *ch, int delay, int half)
++{
++  ch->half= half;
++  ch->fall_in= 0;
++  ch->rise_in= delay;
++}
++
++/*
++ * Walk a channel's wave: rise when owed, fall half a period later.  The rise is skipped-but-
++ * not-lost if the pin is somehow still high (forced low, retry next cycle) because a counter
++ * subscriber only sees a 0->1, and losing one would silently under-count the wheel.
++ */
++void
++cl_rd2_motor::step_ch(struct rd2_tach_ch *ch, class cl_hw *ph, int bit, bool count_emitted)
++{
++  if (ch->rise_in >= 0)
++    {
++      if (ch->rise_in > 0)
++        {
++          ch->rise_in--;
++          return;
++        }
++      if (ch->level)
++        {
++          drive_pin(ph, bit, 0);
++          ch->level= 0;
++          ch->fall_in= 0;
++          ch->rise_in= 1;
++          return;
++        }
++      drive_pin(ph, bit, 1);
++      ch->level= 1;
++      ch->rise_in= -1;
++      ch->fall_in= ch->half;
++      if (count_emitted)
++        emitted++;
++      return;
++    }
++  if (ch->fall_in > 0)
++    {
++      ch->fall_in--;
++      if (ch->fall_in == 0)
++        {
++          drive_pin(ph, bit, 0);
++          ch->level= 0;
++        }
++    }
++}
++
++/*
++ * Position, gear, wheel: everything derived from the shaft angle, once per machine cycle.
++ */
++void
++cl_rd2_motor::wheel(void)
++{
++  long slots= cfg_at(motor_cfg_slots);
++  long pmin= cfg_at(motor_cfg_period_min);
++  long guard= 0;
++  double step;
++  double gear, back, target, d, ad, s, take;
++  int sign;
++  bool below;
++
++  pos+= w_q / MOTOR_Q20;
++
++  /* --- gear train with lost motion --------------------------------------------------- */
++  gear= (double)cfg_at(motor_cfg_gear_x1000) / 1000.0;
++  if (gear < 1.0)
++    gear= 1.0;
++  back= (double)cfg_at(motor_cfg_backlash_x1000) / 360000.0;  /* output degrees -> output rev */
++  if (back < 0.0)
++    back= 0.0;
++  target= pos / gear;
++  d= target - out_target;
++  out_target= target;
++  if (d != 0.0)
++    {
++      s= (d > 0.0) ? 1.0 : -1.0;
++      if (out_side != 0 && (double)out_side != s)
++        {
++          /* Reversal: the driving flank lets go and the gap to cross is the distance back to
++             the flank the output left, which is the total backlash minus whatever of it had
++             already been taken up.  A reversal after a reversal therefore regenerates slack
++             instead of pretending the flanks never touched. */
++          slack= back - slack;
++          if (slack < 0.0)
++            slack= 0.0;
++        }
++      out_side= (int)s;
++      ad= fabs(d);
++      if (slack > 0.0)
++        {
++          take= (ad < slack) ? ad : slack;
++          slack-= take;
++          d-= s * take;               /* what went into taking up the gap does not move the
++                                         output */
++        }
++      if (d != 0.0)
++        out_pos+= d;
++    }
++
++  /* --- the wheel --------------------------------------------------------------------- */
++  if (slots < 1)
++    slots= 1;
++  if (pmin < 1)
++    pmin= 1;
++  step= 1.0 / (double)slots;
++
++  sign= (w_q > 0.0) ? 1 : ((w_q < 0.0) ? -1 : 0);
++  if (sign != w_sign)
++    {
++      /* Direction of travel changed (or the shaft started or stopped): re-arm the next
++         boundary to the nearest one AHEAD in the new direction.  Without this, a reversal
++         would find edge_pos on the far side of pos and the loop below would run backwards
++         through every boundary the shaft has already passed, emitting a burst of pulses the
++         wheel never made.  A consequence worth knowing: jogging the shaft back and forth
++         across one notch counts a boundary in each direction, which is what an optical wheel
++         at a slot edge actually does. */
++      w_sign= sign;
++      if (sign > 0)
++        edge_pos= (floor(pos / step) + 1.0) * step;
++      else if (sign < 0)
++        edge_pos= (ceil(pos / step) - 1.0) * step;
++    }
++
++  below= (fabs(w_q) < MOTOR_FLOOR_Q);
++
++  while (sign > 0 && pos >= edge_pos && guard++ < MOTOR_EDGE_GUARD)
++    {
++      pulses++;                       /* the notch really passed, emit or not */
++      if (!below)
++        {
++          double period= MOTOR_Q20 / (fabs(w_q) * (double)slots);
++          int half, quarter;
++          if (period < (double)pmin)
++            {
++              period= (double)pmin;   /* edge clamp: the wheel cannot out-run the pin model */
++              clamped++;
++            }
++          if (period > MOTOR_PERIOD_MAX)
++            period= MOTOR_PERIOD_MAX;
++          half= (int)(period * 0.5 + 0.5);
++          if (half < 1)
++            half= 1;
++          quarter= (int)(period * 0.25 + 0.5);
++          if (quarter < 1)
++            quarter= 1;
++          if (sign > 0)               /* A leads B forward, B leads A in reverse */
++            {
++              arm(&cha, 0, half);
++              arm(&chb, quarter, half);
++            }
++          else
++            {
++              arm(&chb, 0, half);
++              arm(&cha, quarter, half);
++            }
++        }
++      edge_pos+= step;
++    }
++  while (sign < 0 && pos <= edge_pos && guard++ < MOTOR_EDGE_GUARD)
++    {
++      pulses++;
++      if (!below)
++        {
++          double period= MOTOR_Q20 / (fabs(w_q) * (double)slots);
++          int half, quarter;
++          if (period < (double)pmin)
++            {
++              period= (double)pmin;
++              clamped++;
++            }
++          if (period > MOTOR_PERIOD_MAX)
++            period= MOTOR_PERIOD_MAX;
++          half= (int)(period * 0.5 + 0.5);
++          if (half < 1)
++            half= 1;
++          quarter= (int)(period * 0.25 + 0.5);
++          if (quarter < 1)
++            quarter= 1;
++          arm(&chb, 0, half);
++          arm(&cha, quarter, half);
++        }
++      edge_pos-= step;
++    }
++
++  if (below)
++    {
++      /* The shaft is too slow to report: release both pins to the pull-up, disarm both waves
++         and record it.  Note that `pulses' above keeps counting the notches that were
++         physically crossed, so the report shows pulses > emitted for exactly as long as this
++         state lasts -- the contradiction is reported, never smoothed over. */
++      floor_reached= true;
++      released++;
++      cha.rise_in= -1;
++      chb.rise_in= -1;
++      cha.fall_in= 0;
++      chb.fall_in= 0;
++      release_pins();
++      return;
++    }
++  floor_reached= false;
++  step_ch(&cha, port_a, (int)cfg_at(motor_cfg_tach_a_bit), true);
++  step_ch(&chb, port_b, (int)cfg_at(motor_cfg_tach_b_bit), false);
++}
++
++/*
++ * tick_hw() hands every element exactly one machine cycle per call (uc.cc:2981-3005); the
++ * loop is only here so that a direct tick(n) from anywhere else still advances the physics by
++ * n cycles instead of one.  Nothing in this function looks at the host clock, and CKCON0.X2
++ * is not consulted either: the plant is off-chip mechanics, and a faster machine cycle makes
++ * the shaft turn in fewer cycles, which is exactly what peripheral_cycles() must NOT be used
++ * for here.  IDLE does not stop it either -- a motor spinning while the CPU sleeps is the
++ * point of the element.
++ */
++int
++cl_rd2_motor::tick(int cycles)
++{
++  int i;
++
++  for (i= 0; i < cycles; i++)
++    {
++      measure_duty();
++      integrate();
++      wheel();
++    }
++  return resGO;
++}
++
++/*
++ * cl_uc::reset() runs every element's reset() BEFORE cl_51core::clear_sfr() touches the
++ * registers (pattern doc 6), and the `reset' command runs this one standalone, so nothing here
++ * may be read back from an SFR: pos, speed, the duty accumulator and every counter come from
++ * constants.  The cfg parameters are configuration and survive, which is what lets a suite
++ * re-arm the bench with `reset' instead of a new process.  Releasing the pins is the only pin
++ * activity: a wheel that is stopped is a wheel at the pull-up level, and emitting edges from
++ * here would put pulses on the counter before the program has even started.
++ */
++void
++cl_rd2_motor::reset(void)
++{
++  pos= 0.0;
++  w_q= 0.0;
++  edge_pos= 0.0;
++  w_sign= 0;
++  duty= 0.0;
++  duty_high= 0;
++  duty_cycles= 0;
++  duty_permille= 0;
++  held= true;
++  pulses= 0;
++  emitted= 0;
++  clamped= 0;
++  released= 0;
++  floor_reached= true;
++  out_pos= 0.0;
++  out_target= 0.0;
++  slack= 0.0;
++  out_side= 0;
++  cha.half= chb.half= 0;
++  cha.fall_in= chb.fall_in= 0;
++  cha.rise_in= chb.rise_in= -1;
++  retune();
++  release_pins();
++}
++
++/*
++ * The instrument.  Five lines like cl_rd2_kbd's two (rd2_kbd.cc:215-225): the wiring and what
++ * the drive is doing, the shaft, the gear output, the counters, and a WARN that is printed
++ * only when the truth is contradictory.
++ *
++ * cycles/rev is printed always and is exact and unit-free, because machine cycles are the
++ * only honest time base in this file.  rpm is derived from uc->get_xtal() -- the crystal
++ * -X sets and `set sim_xtal' changes, and the same accessor cl_rd2_eeprom reports -- divided
++ * by clock_per_cycle(), which is what makes a machine cycle; with no crystal discoverable the
++ * field reads n/a instead of inventing one.  Both are reporting only: the physics above never
++ * sees either number.
++ */
++void
++cl_rd2_motor::print_info(class cl_console_base *con)
++{
++  long pwm_p= cfg_at(motor_cfg_pwm_port);
++  long pwm_b= cfg_at(motor_cfg_pwm_bit);
++  long ta_p= cfg_at(motor_cfg_tach_a_port);
++  long ta_b= cfg_at(motor_cfg_tach_a_bit);
++  long tb_p= cfg_at(motor_cfg_tach_b_port);
++  long tb_b= cfg_at(motor_cfg_tach_b_bit);
++  long gear= cfg_at(motor_cfg_gear_x1000);
++  char rpmbuf[32];
++  double w= w_q / MOTOR_Q20;                /* rev per machine cycle */
++  double cpc= uc ? (double)uc->clock_per_cycle() : 0.0;
++  double xtal= uc ? uc->get_xtal() : 0.0;
++  double cpr= (w_q != 0.0) ? (MOTOR_Q20 / fabs(w_q)) : 0.0;
++  const char *dir= (w_q > 0.0) ? "fwd" : ((w_q < 0.0) ? "rev" : "stop");
++
++  if (xtal > 0.0 && cpc > 0.0)
++    snprintf(rpmbuf, sizeof(rpmbuf), "%8.3f", w * 60.0 * (xtal / cpc));
++  else
++    snprintf(rpmbuf, sizeof(rpmbuf), "%s", "     n/a");
++  if (gear < 1000)
++    gear= 1000;
++
++  con->dd_printf("motor[%d] duty=%6.2f%% (%ld/1000) pwm=P%ld.%ld tach=P%ld.%ld/P%ld.%ld "
++                 "slots=%ld\n",
++                 id, duty * 100.0, duty_permille, pwm_p, pwm_b, ta_p, ta_b, tb_p, tb_b,
++                 cfg_at(motor_cfg_slots));
++  con->dd_printf("motor[%d] speed=%s rpm (%9.1f cycles/rev) dir=%s pos=%9.4f rev "
++                 "(%9.1f deg)\n",
++                 id, rpmbuf, cpr, dir, pos, pos * 360.0);
++  con->dd_printf("motor[%d] out=%9.4f rev (%9.1f deg) slack=%7.3f deg "
++                 "gear=%ld.%03ld:1 held=%s\n",
++                 id, out_pos, out_pos * 360.0, slack * 360.0,
++                 gear / 1000, gear % 1000, held ? "yes" : "no");
++  con->dd_printf("motor[%d] pulses=%ld emitted=%ld clamped=%ld J_eff=%lld T_stall=%ld "
++                 "wmax_q=%ld Tc=%ld load=%ld mode=%s\n",
++                 id, pulses, emitted, clamped, (long long)(j_eff() + 0.5),
++                 cfg_at(motor_cfg_torque_stall), cfg_at(motor_cfg_wmax_q),
++                 cfg_at(motor_cfg_coulomb), cfg_at(motor_cfg_load_torque),
++                 (cfg_at(motor_cfg_load_mode) == 0) ? "drag" : "gravity");
++  con->dd_printf("motor[%d] bench window=%ld released=%ld pin_a=%d pin_b=%d floor=%s "
++                 "substeps=%d\n",
++                 id, cfg_at(motor_cfg_pwm_window), released, cha.level, chb.level,
++                 floor_reached ? "yes" : "no", RD2_MOTOR_SUBSTEPS);
++
++  /* The contradiction, reported and never resolved silently -- the rule rd2_kbd.cc:178
++     applies to the P1 latch.  cl_timer0::happen() counts (pins & latch) going high
++     (timer0.cc:393-409): with the T1 latch bit cleared, the MCU is blind to a wheel that is
++     demonstrably turning, and the only useful thing the instrument can do is say so. */
++  if (cell_tach && ta_b >= 0 && ta_b <= 7 &&
++      ((cell_tach->get() >> ta_b) & 1) == 0)
++    con->dd_printf("motor[%d] WARN: tach latch P%ld.%ld is 0 -> MCU cannot see the wheel; "
++                   "set the port bit to 1\n", id, ta_p, ta_b);
++}
++
++
++/* End of s51.src/rd2_motor.cc */
+diff --git a/ucsim/src/sims/s51.src/rd2_motorcl.h b/ucsim/src/sims/s51.src/rd2_motorcl.h
+new file mode 100644
+index 0000000..f87cfb2
+--- /dev/null
++++ b/ucsim/src/sims/s51.src/rd2_motorcl.h
+@@ -0,0 +1,227 @@
++/*
++ * Rotary plant model for the AT89C51RD2/ED2 bench: a brushed DC motor, a gear train and a
++ * quadrature tach wheel, hanging off the pins the part already has.  This is NOT a
++ * peripheral: it owns no SFR, no bit, no interrupt source and no clock-control bit, and
++ * nothing in the model talks to it.  It exists so firmware running *inside* the simulator
++ * can close a real loop -- PWM out of the PCA on CEX0/P1.3, tach edges into a real timer
++ * counter input -- while the element reports the ground truth the suite compares against.
++ *
++ * Pins (all doc4235K, printed pages):
++ *   drive   P1.3 = CEX0, the PCA PWM output (section 13; pin table p.35).  The plant reads
++ *           the P1 *latch*, exactly as cl_pca::do_pca_module writes it (pca.cc:297-307 uses
++ *           sfr->set(P1,...), which deliberately does not go through the port hooks), because
++ *           the drive of a motor driver is its input pin, i.e. what the chip outputs.
++ *   tach A  P3.5 = T1 (regs51.h:246-260 bmT1).  The wheel's channel A is driven onto the
++ *           *pin*, not the latch, so cl_timer0::happen() (timer0.cc:393-409) sees it exactly
++ *           like a bench driving the pin through `set pin3`.
++ *   tach B  P3.4 = T0 (bmT0), the quadrature partner; firmware reads it as an input.
++ *
++ * TIME BASE.  Everything here is counted in machine cycles: tick() gets one cycle at a time
++ * from cl_uc::tick_hw() and no rate in this file is multiplied by clock_per_cycle().  The
++ * only place the host-side clock is consulted is print_info()'s rpm column, which is pure
++ * reporting (and prints `n/a' when no crystal is discoverable).  A cycle is therefore the
++ * whole unit system: torque in arbitrary units, speed in revolutions per machine cycle,
++ * inertia in torque*cycle^2 per revolution.  Results do not depend on -X or on CKCON0.X2.
++ *
++ * UNITS OF THE INTEGRATOR, and the one place this file must be read carefully.  The state
++ * variable is w_q, the shaft speed expressed in 2^-20 revolutions per machine cycle -- the
++ * same unit the `wmax_q' configuration slot is declared in, which is why that slot is
++ * Q20.  Newton's law is then integrated exactly as the contract states it, w += T/J per
++ * cycle, with w and wmax_q in that Q20 unit; inertia is consequently torque*cycle^2 per
++ * 2^-20 rev, i.e. 2^-20 of the nominal per-revolution unit.  That fixed point is what makes
++ * the defaults both stable and legible: with torque_stall=1000, wmax_q=10 and
++ * inertia_motor=1000 the electrical time constant of the linear part is
++ * J/(torque_stall/wmax_q) = 10 cycles, and the per-substep loop gain is 0.1/8, so the
++ * discrete loop converges monotonically with no overshoot.  In plain revolutions per cycle
++ * the same numbers would need a substep below 2e-5 cycles, i.e. ~100000 substeps per
++ * machine cycle, which is not a simulation.  Doubles throughout: the physics is deterministic
++ * on a host and every comparison against it carries tolerance.
++ *
++ * THE TORQUE LAW.
++ *   T_drive  = torque_stall * (duty - w_q/wmax_q)
++ *              The two knobs of a permanent-magnet DC motor: stall torque at duty=1,w=0 and
++ *              no-load speed at duty=1,w=wmax.  w enters SIGNED, not |w|: for w>0 the two
++ *              readings are identical, and for w<0 the signed form is the only one that
++ *              still opposes the motion.  At duty=0 the drive is a shorted driver, so the
++ *              back-EMF term is a brake that fights the shaft in whichever direction it is
++ *              turning -- dynamic braking, real for an H-bridge with both low-side FETs on,
++ *              and it is what bounds the downhill speed in load_mode=1.
++ *   T_resist = coulomb*sign(w) + viscous*(w/wmax) + load
++ *              load_mode=0 drag: the load opposes the motion, so it enters with sign(w) and
++ *              helps hold the shaft at rest.  load_mode=1 gravity: the load has one fixed
++ *              sign (it pulls towards negative speed) and can drive the shaft backwards --
++ *              that is the capability the reference model in
++ *              /home/oleksiy/qemu/qemu/hw/misc/pwm_motor.c states it lacks ("no Coulomb
++ *              friction ... never holds against a load torque").  Holding is stiction, not
++ *              damping: at w==0 the shaft stays at 0 while |T_drive - load| is within
++ *              static_friction, and it breaks away when it is not.  Coulomb friction is
++ *              clamped so static_friction >= coulomb always holds.
++ *   J_eff    = inertia_motor + inertia_load * 1e6 / gear_x1000^2      (J_L/N^2)
++ *
++ * DUTY is measured, not asked for: the drive bit of the latch is sampled every cycle and
++ * averaged over pwm_window cycles, the way a firmware's own PWM period would be.  Because
++ * the modelled PCA PWM has a 256-cycle period (8-bit CL, the 9th EPCnL bit is unmodelled --
++ * see pca.cc:297-307), the default window of 4096 cycles is exactly 16 whole periods, so a
++ * steady duty comes out exact rather than filtered.  The first window has not completed at
++ * reset, so duty reports 0 there: honest, and reset() zeroes the accumulator.
++ *
++ * THE WHEEL.  A pulse boundary is `pos' crossing a multiple of 1/slots.  Each boundary arms
++ * a full square wave on A -- high for half a period, low for the next -- and B is armed with
++ * the same wave delayed by a quarter period, so the quadrature order reverses with the sign
++ * of w and firmware can tell direction.  Both edges are emitted, which makes a counter's
++ * reading independent of which edge it counts: this model's timers count RISING
++ * (timer0.cc:393-409 tests (pins&latch) going 0->1) whereas a real 8051 counts FALLING.
++ * That fidelity gap is recorded in SIMULATION-PLAN.md and is deliberately NOT "fixed" here;
++ * emitting both edges is what designs around it.  A period shorter than period_min is
++ * clamped and counted in `clamped'.  Below the emission floor both pins are released to 1
++ * (a pull-up, not a driven 0) and that is recorded too.
++ *
++ * BACKLASH is the classic lost-motion operator: while the input reverses, the output does
++ * not move; the slack is consumed taking up the gap and regenerated on reversal (a
++ * reversal after a partly-consumed gap only has to travel the remaining part to reach the
++ * flank it came from).  `out' is therefore a true dead-band follower of pos/N.
++ *
++ * CONFIG.  cfg slots below; every one is published in init() as motor20_<name> the way
++ * cl_serial_hw publishes its own (serial_hw.cc:229-237), so `set motor20_gear_x1000 4000'
++ * works and `info hardware motor' gets print_cfg_info for free.  `on' is slot 0 and is
++ * handled in conf_op the way cl_port::conf_op handles port_on (port.cc:204-216).
++ *
++ * DRIVING THE PINS goes through the owning port's own cfg space, never through a hardcoded
++ * slot index: enum port_cfg from portcl.h, read with cfg_read(port_pin) (which is what
++ * cl_port::conf_op answers with the live port_pins, port.cc:217-222) and written with
++ * cfg_write(port_pin,...) (which is what reaches cl_port::set_pin and therefore emits
++ * EV_PORT_CHANGED, port.cc:237-254).  NOTE for the next reader: cfg_set() would be the
++ * obvious call and it is the WRONG one -- cl_hw::cfg_set funnels into cl_memory::set, which
++ * writes the cell without notifying the hw operators (mem.cc:1261-1271), so conf_op never
++ * runs, port_pins never moves and no counter ever sees an edge.  cfg_write is the route, and
++ * it needs no fallback to the raw <id>_<n>_cfg space.
++ *
++ * Copyright (C) 2026 Oleksiy <alexian79@gmail.com>
++ * GPL-2.0-or-later
++ */
++
++#ifndef RD2_MOTORCL_HEADER
++#define RD2_MOTORCL_HEADER
++
++#include "hwcl.h"
++
++/* cl_hw ids are a per-category bus other peripherals switch on: serial.cc dispatches on
++   HW_TIMER 1, 2, 3 and 12, stc12_trace.cc on 10, and the RD2 elements claim 13 brg, 14 kbd,
++   15 spi, 16 boot, 17 eeprom (rd2_brgcl.h:30, rd2_kbdcl.h:47, rd2_spiccl.h:50,
++   rd2_bootcl.h:63, rd2_eepromcl.h:109).  There is no HW_MOTOR in enum hw_cath and adding one
++   touches a core header, so -- exactly as cl_stc12_adc passes HW_TIMER for an ADC -- the
++   plant reuses the category and takes HW_TIMER id 20, documented here, see the
++   serial.cc-style dispatch it must not disturb: 18 and 19 are also free, 20 is the value the
++   contract fixes and the one this file claims.  Nothing may partner with it: it is driven
++   only by tick(), and it partners with nothing either -- it reaches the ports through their
++   cfg space, which is a configuration interface, not a partnership. */
++#define RD2_MOTOR_ID 20
++
++/* cfg slots; index == the value published as motor20_<name>.  The order is the contract's
++   and the suite cites it. */
++enum rd2_motor_cfg {
++  motor_cfg_on              = 0,   /* RW  model on/off, conf_op like port.cc:204-216 */
++  motor_cfg_pwm_port        = 1,   /* RW  port carrying the drive PWM */
++  motor_cfg_pwm_bit         = 2,   /* RW  bit of that port: P1.3 = CEX0 */
++  motor_cfg_pwm_invert      = 3,   /* RW  1 = active-low drive */
++  motor_cfg_pwm_window      = 4,   /* RW  duty measurement window, MACHINE cycles */
++  motor_cfg_slots           = 5,   /* RW  tach pulses per motor revolution on A */
++  motor_cfg_tach_a_port     = 6,   /* RW  channel A port (P3) */
++  motor_cfg_tach_a_bit      = 7,   /* RW  channel A bit: P3.5 = T1 */
++  motor_cfg_tach_b_port     = 8,   /* RW  channel B port */
++  motor_cfg_tach_b_bit      = 9,   /* RW  channel B bit: P3.4 = T0 */
++  motor_cfg_torque_stall    = 10,  /* RW  drive torque at 100% duty */
++  motor_cfg_wmax_q          = 11,  /* RW  no-load speed, Q20 rev/cycle */
++  motor_cfg_inertia_motor   = 12,  /* RW  rotor inertia, see the header on units */
++  motor_cfg_inertia_load    = 13,  /* RW  load inertia, reflected by the gear */
++  motor_cfg_gear_x1000      = 14,  /* RW  output reduction N (x1000), N >= 1 */
++  motor_cfg_backlash_x1000  = 15,  /* RW  backlash at the output, degrees x1000 */
++  motor_cfg_coulomb         = 16,  /* RW  kinetic friction torque */
++  motor_cfg_static_friction = 17,  /* RW  break-away torque (clamped up to coulomb) */
++  motor_cfg_viscous_x1000   = 18,  /* RW  viscous torque = x/1000 * |w|/wmax */
++  motor_cfg_load_torque     = 19,  /* RW  external load torque */
++  motor_cfg_load_mode       = 20,  /* RW  0 = drag (opposes motion) 1 = gravity */
++  motor_cfg_period_min      = 21   /* RW  minimum tach half-period source, cycles */
++};
++
++/* Number of cfg slots.  Deliberately not derived from the enumerator: cfg_size() is what
++   cl_hw::init() sizes the hidden space from, so a silent off-by-one here would truncate the
++   published variables instead of failing. */
++#define RD2_MOTOR_CFG_SIZE 22
++
++/* Integration substeps per machine cycle.  Fixed, not configurable: the point is a margin
++   against user-supplied stiffness (the defaults sit at a loop gain of 0.0125 per substep and
++   need none of it), and a variable count would make the physics depend on something outside
++   the cfg space. */
++#define RD2_MOTOR_SUBSTEPS 8
++
++/* One tach channel's output wave.  The wave is armed at a boundary and then walks itself
++   through rise -> fall; nothing here is derived from the host clock. */
++struct rd2_tach_ch
++{
++  int level;       /* level last driven onto the pin, so unchanged pins emit nothing */
++  int rise_in;     /* cycles until the owed rising edge; -1 = none owed */
++  int fall_in;     /* cycles until the falling edge; 0 = not armed */
++  int half;        /* half period the armed wave was built from, cycles */
++};
++
++
++class cl_rd2_motor: public cl_hw
++{
++protected:
++  /* --- what the plant is wired to, re-resolved whenever the cfg port number moves ----- */
++  class cl_memory_cell *cell_pwm;    /* pwm_port latch cell; get(), never read() */
++  class cl_memory_cell *cell_tach;   /* tach_a_port latch cell, for the WARN line only */
++  class cl_hw *port_a, *port_b;      /* ports carrying channels A and B */
++  int pwm_port_nr, tach_a_nr, tach_b_nr;   /* port numbers the above were resolved for */
++
++  /* --- mechanical state, all of it zeroed by reset() ---------------------------------- */
++  double pos;            /* motor shaft angle, revolutions */
++  double w_q;            /* motor speed, 2^-20 rev/cycle (see the header) */
++  double edge_pos;       /* next pulse boundary, revolutions */
++  int w_sign;            /* sign of w last cycle; a change re-arms edge_pos */
++  double duty;           /* drive fraction over the last completed window, 0..1 */
++  long duty_high;        /* drive-high cycles inside the window being measured */
++  long duty_cycles;      /* cycles counted inside that window */
++  long duty_permille;    /* duty in 1/1000, the exact integer the report prints */
++  bool held;             /* stiction is holding the shaft at 0 */
++  long pulses;           /* boundaries crossed: what firmware must be able to count */
++  long emitted;          /* rising edges driven on A: what a counter CAN see */
++  long clamped;          /* boundaries whose period hit period_min */
++  long released;         /* cycles below the emission floor, pins pulled up */
++  bool floor_reached;    /* the wheel is below the emission floor right now */
++
++  /* --- gear train --------------------------------------------------------------------- */
++  double out_pos;        /* output shaft angle, revolutions */
++  double out_target;     /* pos/N last cycle, i.e. the zero-backlash position */
++  double slack;          /* remaining dead band, output revolutions (0..backlash) */
++  int out_side;          /* +1/-1 flank that is driving, 0 = engaged and still */
++
++  /* --- tach output -------------------------------------------------------------------- */
++  struct rd2_tach_ch cha, chb;
++
++  long cfg_at(int slot);               /* cfg slot as a signed integer */
++  void retune(void);                   /* re-resolve cells/ports from the cfg port numbers */
++  double j_eff(void);                  /* inertia reflected to the motor */
++  void integrate(void);                /* one machine cycle of Newton's law, substepped */
++  void measure_duty(void);             /* the moving-window duty meter */
++  void wheel(void);                    /* boundary detection + tach arming + pin stepping */
++  void arm(struct rd2_tach_ch *ch, int delay, int half);
++  void step_ch(struct rd2_tach_ch *ch, class cl_hw *ph, int bit, bool count_emitted);
++  void drive_pin(class cl_hw *ph, int bit, int level);
++  void release_pins(void);
++
++public:
++  cl_rd2_motor(class cl_uc *auc, int aid);
++  virtual int init(void);
++  virtual unsigned int cfg_size(void);
++  virtual const char *cfg_help(t_addr addr);
++  virtual t_mem conf_op(cl_memory_cell *cell, t_addr addr, t_mem *val);
++  virtual int tick(int cycles);
++  virtual void reset(void);
++  virtual void print_info(class cl_console_base *con);
++};
++
++#endif
++
++/* End of s51.src/rd2_motorcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_spi.cc b/ucsim/src/sims/s51.src/rd2_spi.cc
 new file mode 100644
 index 0000000..826fd22
@@ -5491,10 +6559,10 @@ index 6895884..f1077d9 100644
    virtual struct name_entry *bit_tbl(void);
    virtual char *disass(t_addr addr);
 diff --git a/ucsim/src/sims/s51.src/uc89c51r.cc b/ucsim/src/sims/s51.src/uc89c51r.cc
-index 604265d..c7a0daf 100644
+index 604265d..eb031a6 100644
 --- a/ucsim/src/sims/s51.src/uc89c51r.cc
 +++ b/ucsim/src/sims/s51.src/uc89c51r.cc
-@@ -34,12 +34,20 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
+@@ -34,12 +34,29 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
  #include "uc89c51rcl.h"
  #include "regs51.h"
  #include "pcacl.h"
@@ -5503,6 +6571,15 @@ index 604265d..c7a0daf 100644
 +#include "rd2_spiccl.h"
 +#include "rd2_bootcl.h"
 +#include "rd2_eepromcl.h"
++// The rotary plant is off-chip bench mechanics (no SFRs, no interrupt source), so it is not
++// gated on a peripheral the package lacks.  It IS gated on CPU_89C51RD2 rather than on
++// rd2_mem(), because rd2_mem() also covers the 89C51RB2/RC2 (see the note in rd2_mem(): an
++// RD2-only feature must test CPU_89C51RD2 alone), doc4235 -- the only source for the PCA duty
++// meter the plant reads -- documents the AT89C51RD2/ED2, and registering the plant publishes
++// 22 `motor20_*' names whose length widens the core's global name column, reflowing `dump'
++// output on every device that carries it: ident89c51r fell 36/36 -> 0/36 on -t 89C51R from
++// that padding alone, with no behavioural difference anywhere in the transcripts.
++#include "rd2_motorcl.h"
 +#include "timer2cl.h"
  #include "wdtcl.h"
  
@@ -5515,7 +6592,7 @@ index 604265d..c7a0daf 100644
  }
  
  int
-@@ -62,8 +70,23 @@ void
+@@ -62,12 +79,38 @@ void
  cl_uc89c51r::mk_hw_elements(void)
  {
    class cl_hw *h;
@@ -5539,7 +6616,22 @@ index 604265d..c7a0daf 100644
    add_hw(h= new cl_wdt(this, 0x3fff));
    h->init();
    add_hw(h= new cl_pca(this, 0));
-@@ -76,16 +99,440 @@ cl_uc89c51r::make_memories(void)
+   h->init();
++  // Added last so that in a given machine cycle the plant measures the PWM latch the PCA
++  // module has just written, not the one from the cycle before.  id 20 is outside every id
++  // the HW_TIMER dispatchers in this tree test (serial.cc:124 and :131 want 2 and
++  // RD2_BRG_ID, pca.cc:399 wants 0, uc89c51r.cc:85 wants 2), and the plant never emits an
++  // event, so it can never be seen as a timer by them -- see rd2_motorcl.h.
++  if (type->type & CPU_89C51RD2)
++    {
++      add_hw(h= new cl_rd2_motor(this, 20));
++      h->init();
++    }
++
+ }
+ 
+ void
+@@ -76,16 +119,440 @@ cl_uc89c51r::make_memories(void)
    cl_uc52::make_memories();
  }
  

@@ -5,7 +5,7 @@ What this is
 ------------
 
 Research work on the Atmel AT89C51RD2 / AT89C51ED2 for reverse engineering: a device-model and
-peripheral build-out on top of ucsim, a verification bed of 26 counted suites plus runtests
+peripheral build-out on top of ucsim, a verification bed of 27 counted suites plus runtests
 (reported, never counted), and the analysis notes that record what the datasheet actually says.
 Distributed under GPL-2.0-or-later (see LICENSE), the same licence as ucsim, because the code here
 modifies and extends ucsim.
@@ -23,20 +23,20 @@ redistributed here. To reproduce the exact tree every suite in `t/` was run agai
     # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh
 
-The patch touches **38 files**: 28 modified (+2494 / -192, measured 2026-11-14) and 10 added
-(`rd2_boot`, `rd2_brg`, `rd2_eeprom`, `rd2_kbd`, `rd2_spi` and their `*cl.h`, 2483 lines). Four
-files the working tree also
+The patch touches **40 files**: 28 modified (+2514 / -192, measured 2026-11-15) and 12 added
+(`rd2_boot`, `rd2_brg`, `rd2_eeprom`, `rd2_kbd`, `rd2_motor`, `rd2_spi` and their `*cl.h`, 3539
+lines). Four files the working tree also
 changes are deliberately left out — `ucsim/src/common.mk`, `ucsim/src/packages.mk`,
 `ucsim/src/core/utils.src/ddconfig.h`, `ucsim/docs/Makefile` — because they are `./configure` output
 and the copies in the base tree record one machine (curses and flex detected off, an install prefix
 pointed at the author's home). `build.sh` runs `configure` after the patch, so every reader gets
 their own values. It was verified by applying the patch to a fresh clone of that commit and
-comparing trees: file-by-file comparison of all 38 patched paths reports no content difference at
+comparing trees: file-by-file comparison of all 40 patched paths reports no content difference at
 all, and the only other differences under `ucsim/src` are build artefacts. `slices/` holds the two
 changes cut as self-contained, upstream-sized pieces -- the timer-2 `cycles` bug and the
 port-mirror double-notify -- each with its own patch, text and evidence.
 
-Attribution note: the 10 new files carry `Copyright (C) 2026 Oleksiy`. The fork's own new files
+Attribution note: the 12 new files carry `Copyright (C) 2026 Oleksiy`. The fork's own new files
 (`stc12_*.cc`) carry `Copyright (C) 2026 CrispStrobe`; that header convention was copied, the
 authorship is not theirs.
 

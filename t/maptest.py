@@ -43,10 +43,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from simproc import run_pipe
 
-S51 = os.environ.get("S51") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+S51 = os.environ.get("S51") or HERE
 SIM = os.environ.get("S51_SIM") or os.path.join(
     S51, "vendor/ucsim-stc/ucsim/src/sims/s51.src/ucsim_51")
-MAPDIR = os.path.join(S51, "t", "map")
+# The fixtures live beside this suite.  $S51 selects the *vendor* tree, and the two are
+# different directories whenever the floor is run against another checkout -- which is
+# exactly how this suite broke once $S51 had to be set so that runtests could find src/.
+MAPDIR = os.path.join(HERE, "t", "map")
 IHX = os.path.join(MAPDIR, "tiny.ihx")
 
 MAIN = 0x00d0                   # CSEG, `C: 000000D0  _main'

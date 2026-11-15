@@ -5,7 +5,7 @@ Base for 8051 decompilation work. Built on **ucsim 0.8.15** (D. Drotos, GPL-2), 
 model** (`s51.src/uc89c51r.cc`, class `cl_uc89c51r`).
 
 This repo is the **simulator side**: a device-model and peripheral build-out on ucsim, a
-verification bed of 26 counted suites plus `runtests` (reported, never counted), and the analysis
+verification bed of 27 counted suites plus `runtests` (reported, never counted), and the analysis
 notes that record what the datasheet actually says. The
 AT89C51RD2 Ghidra language is the sibling repo `ghidra-at89c51rd2`; the gated patch to Ghidra's
 shared 8051 include is `ghidra-8051-dual-dptr`. GPL-2.0-or-later (`LICENSE`); the upstream commit
@@ -17,7 +17,7 @@ this was built on, and the licensing of every piece, are in `NOTICE`.
     # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh                                   # configure + make (logs: /tmp/s51-*.log)
     ./s51 firmware.hex                           # interactive; == ucsim_51 -t 89C51R
-    cd t && ./floor.sh                           # 26 suites against that binary, ~2 min
+    cd t && ./floor.sh                           # 27 suites against that binary, ~2 min
 
 The 161 MB GPL base tree is not redistributed here. `patches/rd2-vs-ucsim-stc-441710c.patch` is
 verified against a fresh clone of that commit: applied there, `diff -rq` against the tree every
@@ -420,11 +420,11 @@ the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing u
 and banner artifacts.
 
 Items (1)-(11) are the whole delta from the vendored commit: `git -C vendor/ucsim-stc diff --stat`,
-with the four configure-generated files below excluded, reports **28 tracked files, 2494 insertions,
-192 deletions** (measured 2026-11-14 on the regenerated patch); that count *excludes* the 10
-untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`, `rd2_eeprom` and their headers,
-2483 lines).
-`patches/rd2-vs-ucsim-stc-441710c.patch` carries all **38** and is verified by applying it to a
+with the four configure-generated files below excluded, reports **28 tracked files, 2514 insertions,
+192 deletions** (measured 2026-11-15 on the regenerated patch); that count *excludes* the 12
+untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`, `rd2_eeprom`, `rd2_motor` and
+their headers, 3539 lines).
+`patches/rd2-vs-ucsim-stc-441710c.patch` carries all **40** and is verified by applying it to a
 clean clone of `441710c`: zero content differences against the tree every suite here was run
 against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch` is the **X2-era
 snapshot only** (2026-10-11, 428 lines across 10 files); it still applies with `git apply --check`
@@ -588,7 +588,7 @@ Manual that doc4235 defers to — doc4235 itself contains no flag semantics):
 overflow expression. **ucsim is the only one of the three matching the Atmel documentation on
 both cases.**
 
-**Running everything** — `t/floor.sh [binary]` runs the 26 simulation suites against one binary in
+**Running everything** — `t/floor.sh [binary]` runs the 27 simulation suites against one binary in
 about two minutes. The binary is the **first argument**; the floor exports it as `S51_SIM`, and every suite
 now reads that variable. That was not true until the SPI cutover: eleven suites hard-coded the
 vendor path, so a floor "run against another build" was silently re-testing the vendor tree for
@@ -618,7 +618,7 @@ may run alongside either of them, but never twice at once, since both write the 
 
 ## Reproducing
 
-    ./floor.sh                        # 26 suites vs one binary, ~2 min; $1 = binary to test
+    ./floor.sh                        # 27 suites vs one binary, ~2 min; $1 = binary to test
     ~/s51/build.sh                    # (the lines below assume the tree is at ~/s51)
     cd ~/s51/t
     ./uctrace.py tC.hex 4                # manual's worked example -> 6d 85
@@ -666,7 +666,7 @@ instruction; `xval` prints the same tuples from the other core, so the two are d
                                verification rules -- the long form of everything below
     doc4235-spec.md            what the datasheet says, section + PRINTED page for each answer
     ucsim-periph-pattern.md    how to add a peripheral to this codebase, learned from the four
-    t/                         floor of 26 counted suites plus runtests (reported, never
+    t/                         floor of 27 counted suites plus runtests (reported, never
                                counted) + the Ghidra-side suites, images, the real sdcc
                                fixtures in t/map/, mkhex.py, simproc.py, uctrace.py, xcompare.py,
                                runtests.py, and the notes beside each suite

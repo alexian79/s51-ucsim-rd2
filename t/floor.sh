@@ -21,7 +21,7 @@ cd "$ROOT" || exit 2
 
 GREP='Checks run|cases agree|baselines match|byte-identical|PASS|FAIL'
 
-SUITES="ident89c51r rd2identity rd2registers banktest ccapmrst dpstest t2oetest wdttest x2test xramtest hwtest irctest pcapin euarttest uartmp runtests"
+SUITES="ident89c51r rd2identity rd2registers banktest ccapmrst dpstest t2oetest wdttest x2test xramtest hwtest irctest pcapin euarttest uartmp motortest runtests"
 for f in kbdtest spitest ckrltest bootromtest eepromtest t2cnttest bpcmdtest wptrtest symtest maptest s51dbgtest; do
   [ -f "t/$f.py" ] && SUITES="$SUITES $f"
 done
