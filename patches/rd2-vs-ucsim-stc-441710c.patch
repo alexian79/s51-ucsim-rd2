@@ -6725,7 +6725,7 @@ index 6895884..f1077d9 100644
    virtual struct name_entry *bit_tbl(void);
    virtual char *disass(t_addr addr);
 diff --git a/ucsim/src/sims/s51.src/uc89c51r.cc b/ucsim/src/sims/s51.src/uc89c51r.cc
-index 604265d..bf2e273 100644
+index 604265d..b1f4d4e 100644
 --- a/ucsim/src/sims/s51.src/uc89c51r.cc
 +++ b/ucsim/src/sims/s51.src/uc89c51r.cc
 @@ -34,12 +34,29 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
@@ -6797,7 +6797,7 @@ index 604265d..bf2e273 100644
  }
  
  void
-@@ -76,16 +119,443 @@ cl_uc89c51r::make_memories(void)
+@@ -76,16 +119,452 @@ cl_uc89c51r::make_memories(void)
    cl_uc52::make_memories();
  }
  
@@ -7220,6 +7220,15 @@ index 604265d..bf2e273 100644
 + * the datasheet implies: the byte the flash array holds at FFF0h is fetched and executed
 + * after the call has been named and counted as refused (rd2_boot.cc).  Accepting the
 + * call silently would let an application that forgot ENBOOT pass a test of the API.
++ *
++ * Nothing here checks that the arrival was an LCALL, and nothing on the part checks it
++ * either: "must be done by LCALL instruction to be able to comeback in the application"
++ * (printed p. 112) states a condition for the ROM's own RET to reach the caller again, not a
++ * rule the hardware tests.  Firmware reaching FFF0h by LJMP, by SJMP or by falling through
++ * fares the same here as on silicon -- the API runs, and its RET pops whatever SP names -- so
++ * refusing such an entry would invent a check the chip does not have.  Every leg of
++ * t/bootromtest.py therefore takes the documented LCALL path, which is also the only path
++ * whose return the suite can assert.
 + *
 + * The interrupts are deliberately left alone: "The interrupts are not disabled by the
 + * bootloader.  Interrupts must be disabled by user prior to jump to the USER_CALL"

@@ -420,7 +420,7 @@ the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing u
 and banner artifacts.
 
 Items (1)-(11) are the whole delta from the vendored commit: `git -C vendor/ucsim-stc diff --stat`,
-with the four configure-generated files below excluded, reports **28 tracked files, 2597 insertions,
+with the four configure-generated files below excluded, reports **28 tracked files, 2606 insertions,
 223 deletions** (measured 2026-11-15 on the regenerated patch); that count *excludes* the 12
 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`, `rd2_eeprom`, `rd2_motor` and
 their headers, 3565 lines).

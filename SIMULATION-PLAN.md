@@ -580,6 +580,16 @@ are recorded here rather than dropped quietly.
   zeroes `n_modf`). `USER_CALL=` and the array still survive on purpose: one is the fixed entry
   address from table 24-10, the other is flash. Gate: `t/bootromtest.py` **70/70** with two new
   legs; the pre-fix binary reads `calls=1 bytes_written=1` *after* the reset.
+- **`USER_CALL` does not verify `LCALL` — real, and correct to leave.** The hook sits on the
+  instruction boundary at `PC == 0FFF0h` (`uc89c51r.cc:543`), so an `LJMP 0FFF0h` runs the API and
+  the model-issued `RET` pops whatever `SP` names. That is what the part does too: the datasheet's
+  "must be done by LCALL instruction to be able to comeback in the application" is a condition for
+  the ROM's own `RET` to find the caller again, not a rule the hardware tests, and the ROM is
+  entered at its first byte however the PC got there. Refusing a non-`CALL` entry would invent a
+  check the chip does not have, so the corner is written into the hook's comment instead. The same
+  block records why the entry is caught from the PC rather than by hooking the read at `FFF0h`: a
+  read hook would run the API on a console `dump code`, and on a `MOVC` of the vector, and a flash
+  array that answers a read by erasing blocks is not a memory.
 - **`MODF` did not re-arm — real.** `do_modf()` clears `SPEN`, so restoring `SPEN` under a still
   low `SS` is a fresh fault, not a repeat. The guard tested the flag that had just been raised, so
   a routine that wrote `SPCON` *without* the documented `SPSTA` read cleared the fault without
