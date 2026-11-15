@@ -108,7 +108,7 @@ Confirmed by grep, and re-checked after every phase. Addresses below come from d
 Off this list since the audit: `CKCON0` (see **X2 mode** below), `PCON.POF` (reset `00X1 0000b` =
 Table 21-1 p.87: POF is *set* out of reset and cleared by software; the power-fail comparator itself
 stays unmodelled by decision), the internal baud-rate
-generator (`BRL` 0x9A / `BDRCON` 0x9B — `t/euarttest.py`, 38 checks reproducing the datasheet's own
+generator (`BRL` 0x9A / `BDRCON` 0x9B — `t/euarttest.py`, 45 checks reproducing the datasheet's own
 table vectors to the clock), the enhanced UART's receive side (`SM2` multiprocessor address filter,
 the `uart0_rx9` 9th-bit/stop-bit input framing, and the `SMOD0`→`SCON.7` framing-error mux —
 `t/uartmp.py`, 19 checks), the **keyboard interface** (see **Keyboard interface** below), and the
@@ -255,9 +255,12 @@ doc4235 §14.1/14.2 are defined entirely in terms of those two bits — which is
 `uart0_rx9` input exists to supply.
 Timer 2 correctly does **not** set TF2 while RCLK/TCLK are active, per the 8052 rule.
 
-The RD2's own clock-source selection is honoured only partially: ucsim treats T2CON.RCLK/TCLK as
-the T1-vs-T2 choice, which matches the datasheet table, but `BDRCON.TBCK/RBCK` and the internal
-BRG (`BRL` 0x9A) are absent, so `TBCK=1` configurations would silently fall back to a timer.
+The RD2's own clock-source selection is honoured **per direction**, exactly as doc4235 table 14-3
+states it: `T2CON.TCLK` and `T2CON.RCLK` choose T1-vs-T2 for Tx and Rx independently, and
+`BDRCON`'s `TBCK`/`RBCK` hand a direction to the internal BRG (`BRL` 0x9A) instead, which makes
+the matching `T2CON` bit don't-care. `info hardware uart` prints the outcome as `Tx=… Rx=…`, and
+`t/euarttest.py` leg 10 pins all four table rows plus the rule that a running timer 1 cannot
+speed up a timer-2-clocked byte.
 
 ## Local changes to the vendored tree
 

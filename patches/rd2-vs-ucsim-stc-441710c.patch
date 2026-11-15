@@ -5397,7 +5397,7 @@ index 9047f34..7b72756 100644
  
  #define bmTF2	 0x80
 diff --git a/ucsim/src/sims/s51.src/serial.cc b/ucsim/src/sims/s51.src/serial.cc
-index fa36098..25dc14f 100644
+index fa36098..66dcc57 100644
 --- a/ucsim/src/sims/s51.src/serial.cc
 +++ b/ucsim/src/sims/s51.src/serial.cc
 @@ -46,11 +46,17 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
@@ -5418,16 +5418,28 @@ index fa36098..25dc14f 100644
  }
  
  cl_serial::~cl_serial(void)
-@@ -84,12 +90,31 @@ cl_serial::init(void)
+@@ -80,16 +86,41 @@ cl_serial::init(void)
+   if (((there_is_t2= t2) != 0))
+     {
+       t_mem d= sfr->get(T2CON);
+-      t2_baud= d & (bmRCLK | bmTCLK);
++      /* Per direction, per doc4235 table 14-3: TCLK clocks Tx from timer 2, RCLK clocks Rx
++         from timer 2, and either can be set alone. */
++      t2_tx_baud= (d & bmTCLK) != 0;
++      t2_rx_baud= (d & bmRCLK) != 0;
      }
    else
-     t2_baud= false;
+-    t2_baud= false;
 -  /*
 -  chars pn(id_string);
 -  pn.append("%d_", id);
 -  uc->vars->add(pn+chars("on"), cfg, serconf_on);
 -  uc->vars->add(pn+chars("check_often"), cfg, serconf_check_often);
 -  */
++    {
++      t2_tx_baud= false;
++      t2_rx_baud= false;
++    }
 +  /* The RD2 builds its internal BRG as a hardware element (cl_uc89c51rd2::mk_hw_elements),
 +     finding one is what makes BDRCON and CKCON0.SIX2 mean anything on this instance; on every
 +     other 51 in the tree 0x9b is not ours and stays inert. */
@@ -5456,10 +5468,15 @@ index fa36098..25dc14f 100644
    return(0);
  }
  
-@@ -103,6 +128,25 @@ cl_serial::new_hw_added(class cl_hw *new_hw)
+@@ -101,10 +132,31 @@ cl_serial::new_hw_added(class cl_hw *new_hw)
+     {
+       there_is_t2= true;
        t_mem d= sfr->get(T2CON);
-       t2_baud= d & (bmRCLK | bmTCLK);
-     }
+-      t2_baud= d & (bmRCLK | bmTCLK);
++      /* Per direction; see cl_serial::init() for why. */
++      t2_tx_baud= (d & bmTCLK) != 0;
++      t2_rx_baud= (d & bmRCLK) != 0;
++    }
 +  if (new_hw->category == HW_TIMER &&
 +      new_hw->id == RD2_BRG_ID)
 +    {
@@ -5468,9 +5485,9 @@ index fa36098..25dc14f 100644
 +	 added after cl_serial::init() has run, so this is where uart0_rx9
 +	 actually gets bound in practice. */
 +      mk_rx9_var();
-+    }
-+}
-+
+     }
+ }
+ 
 +void
 +cl_serial::mk_rx9_var(void)
 +{
@@ -5479,10 +5496,12 @@ index fa36098..25dc14f 100644
 +  rx9_var= true;
 +  chars pn("", "uart%d_", id);
 +  uc->vars->add(pn+"rx9", cfg, serconf51_rx9, cfg_help(serconf51_rx9));
- }
- 
++}
++
  void
-@@ -151,6 +195,7 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
+ cl_serial::added_to_uc(void)
+ {
+@@ -151,6 +203,7 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
        s_tr_bit = 0;
        s_tr_tick= 0;
        s_tr_t1= 0;
@@ -5490,7 +5509,7 @@ index fa36098..25dc14f 100644
      }
    if (b)
      {
-@@ -164,7 +209,20 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
+@@ -164,7 +217,20 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
    if ((cell == scon) ||
        b)
      {
@@ -5512,7 +5531,7 @@ index fa36098..25dc14f 100644
        _bmREN= n & bmREN;
        _bits= 8;
        switch (_mode)
-@@ -189,7 +247,19 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
+@@ -189,7 +255,19 @@ cl_serial::write(class cl_memory_cell *cell, t_mem *val)
      }
    else if (cell == pcon)
      {
@@ -5532,7 +5551,7 @@ index fa36098..25dc14f 100644
        /*switch (_mode)
  	{
  	case 1:
-@@ -214,34 +284,42 @@ cl_serial::conf_op(cl_memory_cell *cell, t_addr addr, t_mem *val)
+@@ -214,34 +292,42 @@ cl_serial::conf_op(cl_memory_cell *cell, t_addr addr, t_mem *val)
  {
    if (addr < serconf_nr)
      return cl_serial_hw::conf_op(cell, addr, val);
@@ -5590,16 +5609,32 @@ index fa36098..25dc14f 100644
  
    switch (_mode)
      {
-@@ -263,27 +341,171 @@ cl_serial::serial_bit_cnt(void)
+@@ -262,28 +348,186 @@ cl_serial::serial_bit_cnt(void)
+       rec_src= &s_rec_tick;
        break;
      }
-   if (t2_baud)
+-  if (t2_baud)
 -    _divby= 16;
-+    /* Intel/Atmel: baud = overflow_rate / 32 on a 12-clock part. The 1T STC
-+       parts use 16 because their timer already runs at the oscillator rate. */
-+    _divby= (uc->clock_per_cycle() == 1) ? 16 : 32;
++  /* Timer 2 and timer 1 do not share a divisor: doc4235 figure 14-4 divides the timer-2
++     overflow rate by 16, which on a 12-clock part this model counts as 32 overflow ticks,
++     while the timer-1 rate is 2^SMOD/32 of its overflow rate (and, unlike timer 2, SMOD does
++     apply to it).  The 1T STC parts use 16 for timer 2 because their timer already runs at
++     the oscillator rate.  Because table 14-3 picks the source per direction, the divisor is
++     picked per direction too -- and it is deliberately NOT written back into _divby: that
++     member holds the mode's timer-1 value, and clobbering it is what forced the `!t2_baud'
++     guard on the mode 0 conversion below. */
++  const int t2divby= (uc->clock_per_cycle() == 1) ? 16 : 32;
++
 +  tr_divby= _divby;
 +  rec_divby= _divby;
++  if (_mode == 1 ||
++      _mode == 3)
++    {
++      if (t2_tx_baud)
++        tr_divby= t2divby;
++      if (t2_rx_baud)
++        rec_divby= t2divby;
++    }
 +  /* doc4235 table 14-4 (printed p.53) fixes mode 2 at "9-bit UART FXTAL/64 or FXTAL/32", so on
 +     a 12-clock part the bit is 64 (SMOD=0) or 32 (SMOD=1) OSCILLATOR clock periods -- and
 +     s_tr_tick/s_rec_tick accumulate those clocks (`s_tr_tick += cycles * clock_per_cycle()` in
@@ -5634,11 +5669,11 @@ index fa36098..25dc14f 100644
 +     this file (a `/ M' anywhere below would mean a divisor had been left in raw oscillator
 +     clocks, where the prescaler cannot reach it).
 +
-+     Mode 0 only converts when its divisor really is the fixed one: t2_baud overwrote _divby
-+     above with the dimensionless overflow divisor, and doc4235 gives mode 0 its own clock
-+     select (BDRCON.SRC, table 14-13) while TCLK/RCLK are the mode 1/3 selects, so the mode 0
-+     + TCLK combination is not a documented state of this part. */
-+  if (rd2_euart && (_mode == 2 || (_mode == 0 && !t2_baud)))
++     Mode 0 needs no baud-source guard any more: the timer-2 divisor is applied only in modes
++     1 and 3, which is where table 14-3 makes TCLK/RCLK selects at all, so the fixed mode 0
++     divisor now reaches the conversion intact whatever stale bits T2CON happens to hold. */
++  if (rd2_euart &&
++      (_mode == 2 || _mode == 0))
 +    {
 +      tr_divby/= 2;
 +      rec_divby/= 2;
@@ -5767,7 +5802,7 @@ index fa36098..25dc14f 100644
  int
  cl_serial::tick(int cycles)
  {
-@@ -315,25 +537,107 @@ cl_serial::tick(int cycles)
+@@ -315,25 +559,107 @@ cl_serial::tick(int cycles)
  	{
  	  s_receiving= true;
  	  s_rec_bit= 0;
@@ -5882,7 +5917,7 @@ index fa36098..25dc14f 100644
    s_rec_tick+= l;
    return(0);
  }
-@@ -353,12 +657,23 @@ cl_serial::reset(void)
+@@ -353,12 +679,24 @@ cl_serial::reset(void)
    s_rec_t1   = 0;
    s_tr_tick  = 0;
    s_rec_tick = 0;
@@ -5902,11 +5937,12 @@ index fa36098..25dc14f 100644
 +  _bmSMOD0   = 0;
 +  /* clear_sfr() zeroes T2CON without notifying us, so the cached baud-source flag has
 +     to be dropped here too, exactly like fe above. */
-+  t2_baud    = false;
++  t2_tx_baud = false;
++  t2_rx_baud = false;
  }
  
  void
-@@ -370,15 +685,34 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
+@@ -370,15 +708,42 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
  	{
  	  /* Timer 1 baud — skip if BRT or Timer 2 is the baud source.
  	     AUXR.S1BRS (bit 0) selects BRT on STC12; AUXR.S1ST2 (bit 0)
@@ -5926,10 +5962,18 @@ index fa36098..25dc14f 100644
 -	      s_rec_t1++;
 -	      s_tr_t1++;
 +	      /* A direction the BRG owns must not also answer to timer 1, otherwise TBCK=1
-+		 would keep falling back to the timer and the select would be a no-op. */
-+	      if (!brg_drives(false))
++		 would keep falling back to the timer and the select would be a no-op.  The same
++		 is true of the direction table 14-3 hands to timer 2: with TCLK set the Tx bit
++		 clock IS the timer-2 overflow rate, and a timer-1 overflow contributes nothing
++		 to it.  This guard used to be per part rather than per direction, so on the
++		 AT89C51RD2 -- where the AUXR test above is inert -- a running timer 1 advanced
++		 the counters of a timer-2-clocked UART and the byte went out at timer 1's rate
++		 (6.2x early with TH1=0xFD against RCAP2=0xFFF0; D20). */
++	      if (!brg_drives(false) &&
++		  !t2_rx_baud)
 +		s_rec_t1++;
-+	      if (!brg_drives(true))
++	      if (!brg_drives(true) &&
++		  !t2_tx_baud)
 +		s_tr_t1++;
  	    }
  	}
@@ -5945,7 +5989,27 @@ index fa36098..25dc14f 100644
        if (where->id == 3 /* STC12 BRT */)
  	{
  	  s_rec_t1++;
-@@ -398,8 +732,18 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
+@@ -391,15 +756,37 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
+ 	    {
+ 	    case EV_T2_MODE_CHANGED:
+ 	      {
+-		if (!t2_baud)
+-		  s_rec_t1= s_tr_t1= 0;
+-		t_mem *d= (t_mem *)params;
+-		t2_baud= *d & (bmRCLK | bmTCLK);
++		  /* Zero only the direction whose source is changing, and only when it was not
++		     already on timer 2: what those hold are timer-1 overflow ticks, which mean a
++		     different bit time to a timer-2 clock.  The payload is the T2CON value with
++		     RCLK/TCLK cleared by the publisher whenever timer 2 is not actually in the
++		     baud mode (clock out, say), so this is the effective select, not the raw
++		     bits. */
++		  if (!t2_tx_baud)
++		    s_tr_t1= 0;
++		  if (!t2_rx_baud)
++		    s_rec_t1= 0;
++		  t_mem *d= (t_mem *)params;
++		  t2_tx_baud= (*d & bmTCLK) != 0;
++		  t2_rx_baud= (*d & bmRCLK) != 0;
  		break;
  	      }
  	    case EV_OVERFLOW:
@@ -5956,47 +6020,64 @@ index fa36098..25dc14f 100644
 +		 timer-1 counters.  On the AT89C51RD2 clock out (T2MOD.T2OE) wins the one
 +		 `mode` variable, and its reload overflow is published as EV_OVERFLOW as
 +		 well; counting that made the EUart run fast whenever clock out was active
-+		 under stale RCLK/TCLK bits.  t2_baud now follows the mode in effect. */
-+	      if (!t2_baud)
++	     under stale RCLK/TCLK bits.  The per-direction flags follow the mode in effect. */
++	      if (!t2_tx_baud &&
++		  !t2_rx_baud)
 +	        break;
-+	      if (!brg_drives(false))
-+		s_rec_t1++;
-+	      if (!brg_drives(true))
-+		s_tr_t1++;
++	      if (!brg_drives(false) &&
++		  t2_rx_baud)
++	        s_rec_t1++;
++	      if (!brg_drives(true) &&
++		  t2_tx_baud)
++	        s_tr_t1++;
  	      break;
  	    default: break;
  	    }
-@@ -430,6 +774,14 @@ cl_serial::print_info(class cl_console_base *con)
+@@ -429,7 +816,18 @@ cl_serial::print_info(class cl_console_base *con)
+   int mode= (sc&(bmSM0|bmSM1))>>6;
    con->dd_printf("%s", modes[mode]);
    if (mode == 1 || mode == 2)
-     con->dd_printf(" (timer%d)", (t2_baud)?2:1);
+-    con->dd_printf(" (timer%d)", (t2_baud)?2:1);
++    con->dd_printf(" (timer%d)", (t2_tx_baud || t2_rx_baud) ? 2 : 1);
 +  /* Which clock each direction actually runs on, since BDRCON overrides T2CON. */
 +  if (rd2_euart)
 +    {
-+      const char *other= (mode == 0 || mode == 2) ? "fixed" : (t2_baud ? "T2" : "T1");
++      /* One name per direction: table 14-3 can put Tx on timer 2 while Rx stays on timer 1,
++         and a single aggregate here was exactly what hid the mixed case. */
++      const char *tx_other= (mode == 0 || mode == 2) ? "fixed" : (t2_tx_baud ? "T2" : "T1");
 +      con->dd_printf(" Tx=%s Rx=%s",
-+		     brg_drives(true) ? "BRG" : other,
-+		     brg_drives(false) ? "BRG" : other);
++		     brg_drives(true) ? "BRG" : tx_other,
++		     brg_drives(false) ? "BRG" :
++		     (mode == 0 || mode == 2) ? "fixed" : (t2_rx_baud ? "T2" : "T1"));
 +    }
    con->dd_printf(" MultiProc=%s",
  		 (mode&2)?((sc&bmSM2)?"ON":"OFF"):"none");
    con->dd_printf(" irq=%s", (sfr->get(IE)&bmES)?"en":"dis");
 diff --git a/ucsim/src/sims/s51.src/serialcl.h b/ucsim/src/sims/s51.src/serialcl.h
-index c0f196b..085628d 100644
+index c0f196b..674ef41 100644
 --- a/ucsim/src/sims/s51.src/serialcl.h
 +++ b/ucsim/src/sims/s51.src/serialcl.h
-@@ -46,17 +46,52 @@ class cl_serial: public cl_serial_hw
+@@ -45,18 +45,58 @@ class cl_serial: public cl_serial_hw
+ {
  protected:
    class cl_address_space *sfr, *bas;
-   bool there_is_t2, t2_baud;
+-  bool there_is_t2, t2_baud;
++  bool there_is_t2;
++  /* The cached baud-rate selects of doc4235 table 14-3 (and of any 8052): TCLK gives Tx to
++     timer 2, RCLK gives Rx to timer 2, and the two are INDEPENDENT -- the table has rows for
++     T2/T1 and T1/T2.  One flag for both directions made a mixed select unrepresentable and
++     let a running timer 1 advance a timer-2-clocked UART (SIMULATION-PLAN D20). */
++  bool t2_tx_baud, t2_rx_baud;
 +  /* True on the part that builds the internal baud rate generator; cl_uc89c51rd2::
 +     mk_hw_elements is what creates it.  This is the serial model's only clue that BDRCON
 +     and CKCON0.SIX2 are its own registers rather than somebody else's bytes, which keeps
 +     the RD2 identity test inside the device class. */
 +  bool rd2_euart;
    class cl_memory_cell *sbuf, *pcon, *scon, *scon_bits[8];
-   int   s_rec_t1;	// T1 overflows for receiving
-   int   s_tr_t1;	// T1 overflows for sending
+-  int   s_rec_t1;	// T1 overflows for receiving
+-  int   s_tr_t1;	// T1 overflows for sending
++  int   s_rec_t1;	// timer overflows counted for Rx (T1 or T2, per t2_rx_baud)
++  int   s_tr_t1;	// timer overflows counted for Tx (T1 or T2, per t2_tx_baud)
    int   s_rec_tick;	// Machine cycles for receiving
    int   s_tr_tick;	// Machine cycles for sending
 +  int   s_rec_brg;	// BRG overflows for receiving (doc4235 figure 14-5)
@@ -6038,7 +6119,7 @@ index c0f196b..085628d 100644
    cl_serial(class cl_uc *auc);
    virtual ~cl_serial(void);
    virtual int init(void);
-@@ -67,6 +102,8 @@ public:
+@@ -67,6 +107,8 @@ public:
    virtual t_mem read(class cl_memory_cell *cell);
    virtual void write(class cl_memory_cell *cell, t_mem *val);
    virtual t_mem conf_op(cl_memory_cell *cell, t_addr addr, t_mem *val);

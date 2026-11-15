@@ -498,6 +498,43 @@ payload masks `RCLK|TCLK` out unless the mode is `T2MODE_BAUDRATE`, on both writ
 `cl_serial::reset()` clears it because `clear_sfr()` zeroes `T2CON` without notifying anyone. The
 only other consumer of that event is `pca.cc`, which listens on `id == 0`. Gate: leg 9 again,
 sensitivity direction — the pre-fix binary emits `0x30 0x31` where the fixed one emits `0x30`.
+The single `t2_baud` flag this introduced was replaced the same day by the per-direction pair of
+D20; the masking that fixed D19 is untouched and is exactly what makes those two flags the
+*effective* select rather than the raw bits.
+
+**D20 — FIXED 2026-11-15: one baud-select flag for two directions.**
+doc4235 table 14-3 (printed p. 52) selects the UART clock **per direction** — `TCLK` gives Tx to
+timer 2, `RCLK` gives Rx to timer 2, and the table has rows for `T2/T1` and `T1/T2` — while
+`cl_serial` cached `d & (bmRCLK | bmTCLK)` in one `t2_baud`. Two consequences, both from the
+follow-up round of the external review (its item 12):
+
+- Timer 1's overflows were discarded only on STC parts, where `AUXR` bit 0 genuinely means
+  "timer 1 is not the baud source" (that was D17). On this part that bit is `AUXR.AO`, so nothing
+  discarded them and a running timer 1 advanced the counters of a timer-2-clocked UART: with
+  `T2CON=0x34`, `RCAP2=0xFFF0` and `TH1=TL1=0xFD` the byte went out in **10452 clocks instead of
+  64500**, 6.2× early. The two rows of the gate differ by exactly one byte (`SETB`/`CLR` are both
+  1 byte and `TMOD`/`TH1`/`TL1` are written either way), so "is timer 1 ticking" is the only thing
+  that changes between them.
+- A mixed select could not be represented at all: `TCLK=1, RCLK=0` behaved and printed as
+  `Tx=T2 Rx=T2`.
+
+Fix: `t2_tx_baud` / `t2_rx_baud` (`serialcl.h`), fed from the `EV_T2_MODE_CHANGED` payload — which
+the publisher already masks to the effective select, so clock out still clears both and D19 stays
+fixed — and consulted per direction in `happen()`: the timer-1 branch skips the direction timer 2
+owns, and the timer-2 branch requires its own direction's flag instead of the aggregate. The
+divisor is picked per direction as well, in modes 1 and 3 only, and is no longer written back into
+`_divby`; that clobber is what had forced the `!t2_baud` guard on the mode 0 fixed-rate
+conversion, and with it gone a stale `TCLK` cannot stop mode 0 from being the documented
+`Fosc/12`. `print_info()` names each direction's clock separately, which is how the mixed rows
+became visible. On a 12-clock part the two divisors coincide (32 overflow ticks = figure 14-4's
+/16), so the divisor change is behaviour-neutral on this part; it is what `SMOD` needs — `SMOD`
+scales the timer-1 divisor and not the timer-2 one — and it matters on the 1-clock STC parts.
+Gate: `t/euarttest.py` leg 10, 7 checks — equality of the TR1 pair, that pair's sensitivity, timer
+1 still driving when it *is* the source (and not answering when stopped), and the four table rows
+as `info hardware uart` prints them. Against the binary built from the previously shipped patch
+(`/tmp/s51-d20pre-bin`, i.e. after D17-D19) it fails exactly three: `64500 vs 10452 clocks`,
+`Tx=T2 Rx=T2` for `0x14`, `Tx=T2 Rx=T2` for `0x24`; `euarttest` is 45 checks now. Upstream
+candidate — the aggregate select is not RD2-specific, it is the 8052's own per-direction mux.
 
 ### 3.1 Ruled out while auditing the datasheet — do not "fix" these
 
@@ -627,6 +664,20 @@ are recorded here rather than dropped quietly.
   module named simproc* was a gap in the development mirror, which lacked `t/simproc.py`; a clean
   clone of the published tree passes all three. And `motortest` is not "not counted as a gate" —
   it is in the `SUITES` list of `t/floor.sh` and counted with the rest.
+
+#### Follow-up round of the same review — item 12
+
+- **"Timer-2 baud still counts Timer-1 overflows — MEDIUM": real, and the reviewer's diagnosis
+  was the right one.** Confirmed on the shipped binary before touching it (6.2× early, above), and
+  the fix is the one proposed: two direction flags taken from the `EV_T2_MODE_CHANGED` value. The
+  review also named every consumer that had to stop using the aggregate — `serial_bit_cnt()`,
+  `init()`/`new_hw_added()`, `reset()`, `print_info()` — and all four changed; `happen()` is the
+  only place that counts, so the counters themselves stayed per direction, as they already were.
+- **"Only the both-set and both-clear cases are modelled" — no longer true, and the README said
+  so.** The README's "clock-source selection is honoured only partially" paragraph was stale in a
+  second way besides this one: it still claimed `BDRCON.TBCK/RBCK` and the internal BRG were
+  absent, which stopped being true when `rd2_brg.cc` landed. Rewritten to state what is honoured
+  now, per direction, and which suite pins it.
 
 ---
 
@@ -1617,3 +1668,14 @@ gated on the feature (`timer2.cc:130`, `:159`), so the mode cannot leak on a par
 but the bookkeeping lives in shared `timer2.cc` and the next part to adopt clock out inherits the
 bug. Frame all three as one message with the timer-2 `cycles` fix: the baud clock and the
 counter clock are being taken from events that do not say which role the timer is in.
+
+A fourth came from the follow-up round of that review, and it belongs in the same message:
+**D20 is general.** `cl_serial` cached `RCLK | TCLK` in a single flag, so on *every* part that has
+timer 2 a mixed select put both UART directions on timer 2, and any part where nothing else
+discards timer-1 overflows — the STC `AUXR` bit is the only such gate, and the plain 8052 has no
+`AUXR` at all — let a running timer 1 advance the counters of a timer-2-clocked UART. `TCLK` and
+`RCLK` are per-direction selects on the 8052 itself, so this is not a question of whether a part
+has an RD2 feature; the fix is two booleans fed from the mode-change payload, plus picking the
+divisor per direction. It sharpens the framing above: the baud clock was being taken not only from
+events that do not say which role the timer is in, but from a flag that does not say which
+direction it means.

@@ -522,6 +522,67 @@ def leg_baud_source_isolation():
           off_v == (0, False), "on=%s off=%s" % (on_v, off_v))
 
 
+
+def leg_baud_per_direction():
+    """doc4235 table 14-3 (printed p. 52) selects the UART clock PER DIRECTION: `TCLK` gives
+    Tx to timer 2, `RCLK` gives Rx to timer 2, and the table has rows for T2/T1 and T1/T2.
+    The model cached one flag for both, which cost two things:
+
+    (a) the timer-1 overflow handler skipped only on STC parts, where AUXR bit 0 really is a
+        "timer 1 is not the source" bit.  On the RD2 that bit is AUXR.AO, so nothing skipped
+        and a running timer 1 advanced the counters of a timer-2-clocked UART -- with
+        TH1=0xFD against RCAP2=0xFFF0 the byte left 6.2x early (D20).
+    (b) a mixed select was unrepresentable: TCLK=1, RCLK=0 put Rx on timer 2 as well.
+
+    The TR1 rows differ by exactly one byte (`SETB`/`CLR` are both 1 byte, and TH1/TL1/TMOD
+    are written either way), so nothing but "is timer 1 ticking" changes between them.
+    """
+    print("\n== leg 10: table 14-3 selects the baud clock per direction ==")
+    HANG = 25                              # the one row that must never reach its break
+
+    def prog(t2con, tr1):
+        c = bytearray()
+        c += (mov(RCAP2L, 0xf0) + mov(RCAP2H, 0xff) + mov(TL2, 0x00) + mov(TH2, 0xff))
+        c += mov(T2MOD, 0x00)
+        c += mov(T2CON, t2con)             # 0x34 = RCLK|TCLK|TR2, 0x00 = timer 1 both ways
+        c += mov(TMOD, 0x20)               # timer 1 mode 2 -> overflow every 3 counts
+        c += mov(TH1, 0xfd) + mov(TL1, 0xfd)
+        c += mov(TCON, 0x40 if tr1 else 0x00)
+        c += mov(SCON, MODE1)
+        c += send_and_wait(1)
+        return bytes(c) + SJMP
+
+    t2_still = clks_at(prog(0x34, False), None, timeout=HANG)
+    t2_tr1 = clks_at(prog(0x34, True), None, timeout=HANG)
+    t1_tr1 = clks_at(prog(0x00, True), None, timeout=HANG)
+    t1_still = clks_at(prog(0x00, False), None, timeout=HANG)
+
+    check("timer-2 baud: a running timer 1 cannot speed the byte up",
+          t2_still is not None and t2_tr1 == t2_still,
+          "%s vs %s clocks" % (t2_still, t2_tr1))
+    check("sensitivity: timer 1 was really ticking in that row",
+          t1_tr1 is not None and t2_still is not None and t1_tr1 < t2_still,
+          "timer1 %s vs timer2 %s clocks" % (t1_tr1, t2_still))
+    check("timer-1 baud still works, and only while timer 1 runs",
+          t1_tr1 is not None and t1_still is None,
+          "TR1 -> %s clocks, TR1=0 -> %s" % (t1_tr1, "no TI" if t1_still is None
+                                             else t1_still))
+
+    # `info hardware uart` prints the per-direction report; the two mixed rows are what the
+    # single flag could not express.  Steps must reach past the SCON write (11 in) or the
+    # query answers for mode 0 and every row reads "Tx=fixed Rx=fixed".
+    ROWS = {0x34: ("T2", "T2"), 0x14: ("T2", "T1"),
+            0x24: ("T1", "T2"), 0x00: ("T1", "T1")}
+    for t2con, want in ROWS.items():
+        _, out = tx_bytes(prog(t2con, True), None, 16, extra=["info hardware uart"])
+        got = ("?", "?")
+        for ln in out.splitlines():
+            if "Tx=" in ln:
+                parts = dict(p.split("=") for p in ln.split() if "=" in p)
+                got = (parts.get("Tx", "?"), parts.get("Rx", "?"))
+        check("T2CON=0x%02x reports Tx=%s Rx=%s" % ((t2con,) + want), got == want,
+              "reported Tx=%s Rx=%s" % got)
+
 if __name__ == "__main__":
     print("SIM =", SIM)
     leg_vectors()
@@ -538,6 +599,7 @@ if __name__ == "__main__":
     # identity and would pass these two checks vacuously.
     leg_reference_proof(os.environ.get("S51_REF", "/tmp/s51-ref-b"))
     leg_baud_source_isolation()
+    leg_baud_per_direction()
     print("\nChecks run: %d  Failed: %d" % (_checks, len(_failures)))
     if _failures:
         print("FAILURES: " + ", ".join(_failures))
