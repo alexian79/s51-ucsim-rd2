@@ -68,6 +68,12 @@ BRG6 = BRG | BM_SPD
 
 MODE0, MODE1, MODE2 = 0x00, 0x40, 0x80   # SCON: SM0=bit7, SM1=bit6
 X2, SIX2 = 0x01, 0x10
+# Timer 2 and AUXR, for the leg that proves neither of them may drive the timer-1 baud
+# counters.  AUXR bit 0 is AUXR.AO on this part (doc4235 §9), NOT the STC baud select.
+AUXR = 0x8e
+RCAP2L, RCAP2H, TL2, TH2 = 0xca, 0xcb, 0xcc, 0xcd
+T2MOD, T2CON = 0xc9, 0xc8
+T2OE, TR2 = 0x02, 0x04
 
 _checks = 0
 _failures = []
@@ -168,15 +174,15 @@ def clks_at(code, freq, timeout=900):
     return int(m.group(1)) if m else None
 
 
-def tx_bytes(code, freq, steps, timeout=900, sim=None):
+def tx_bytes(code, freq, steps, timeout=900, sim=None, extra=()):
     """Run `code` for a bounded number of instructions with the UART output captured to a
     file, and return the bytes that actually went out plus the console transcript."""
     out = os.path.join(WORKDIR, "out_%d_%x.bin" % (len(code), sum(code) & 0xffff))
     if os.path.exists(out):
         os.unlink(out)
     img = _image("s", code)
-    cmds = ['file "%s"' % img, "step %d" % steps, "dump sfr[0x98]",
-            "info hardware brg", "exit"]
+    cmds = (['file "%s"' % img, "step %d" % steps, "dump sfr[0x98]"] + list(extra) +
+            ["info hardware brg", "exit"])
     args = [sim or SIM, "-t", "89C51RD2", "-c", "-", "-S", "out=%s" % out]
     if freq:
         args += ["-X", freq]
@@ -455,6 +461,67 @@ def leg_fixed_rate_mode2():
           dbl is not None and 32.0 <= dbl <= 46.0,
           ("%.2f clocks/bit" % dbl) if dbl else "TI never set")
 
+def leg_baud_source_isolation():
+    """Two ways something else can steal the timer-1 baud clock.
+
+    (a) AUXR bit 0.  On STC12 that bit is S1BRS, on STC15 it is S1ST2, and both mean
+        "timer 1 is NOT the baud source"; the model tested it on every part.  Here the
+        same address and bit is AUXR.AO, the ALE control used to cut EMI (doc4235 §9),
+        which firmware sets for reasons that have nothing to do with the UART -- and AO=1
+        threw away every timer-1 overflow, so TI never rose.
+    (b) T2MOD.T2OE.  Clock out publishes its reload overflow as EV_OVERFLOW exactly like
+        the baud mode does, and the handler counted it unconditionally, so an active clock
+        out drove the EUart fast.
+    """
+    print("\n== leg 9: only timer 1 may drive the timer-1 baud counters ==")
+    print("   Each variant is one bit away from its control and the same length: the")
+    print("   control writes the same registers with the bit clear (ORL #0, MOV #0).")
+
+    def prog(auxr_bit, t2_on):
+        c = bytearray()
+        c += (mov(RCAP2L, 0xf0) + mov(RCAP2H, 0xff) + mov(TL2, 0x00) + mov(TH2, 0xff))
+        c += mov(T2MOD, T2OE if t2_on else 0x00)
+        c += mov(T2CON, TR2 if t2_on else 0x00)
+        c += or_imm(AUXR, auxr_bit)
+        c += tx_prog(MODE1, 0x00, 0x00, 0x00, 2, timer1=True)
+        return bytes(c)
+
+    STEPS = 900
+    ctl, _ = tx_bytes(prog(0x00, False), None, STEPS)
+    ao, _ = tx_bytes(prog(0x01, False), None, STEPS)
+    t2, _ = tx_bytes(prog(0x00, True), None, STEPS)
+
+    check("control: timer-1 baud sends bytes", len(ctl) >= 1, "%r" % ctl)
+    check("AUXR.AO=1 sends exactly the same bytes", ao == ctl and len(ao) >= 1,
+          "%r vs %r" % (ao, ctl))
+    check("T2 clock out sends exactly the same bytes", t2 == ctl,
+          "%r vs %r" % (t2, ctl))
+
+    # Sensitivity, measured where nothing can wrap.  Reading TL2 after the runs above
+    # would prove nothing: RCAP2 is deliberately close there so that clock out overflows
+    # constantly, and a one-bit pin check depends on how many times it happened to
+    # toggle.  With RCAP2 = 0 the period is the full 65536 counts, so the 16-bit value the
+    # element reports is the raw clock-out count -- 3 per machine cycle, ~92 over the 20
+    # instructions below -- and it cannot wrap.
+    def t2_only(on):
+        return (mov(RCAP2L, 0x00) + mov(RCAP2H, 0x00) +
+                mov(TL2, 0x00) + mov(TH2, 0x00) +
+                mov(T2MOD, T2OE if on else 0x00) +
+                mov(T2CON, TR2 if on else 0x00) + SJMP)
+
+    _, live_on = tx_bytes(t2_only(True), None, 20, extra=["info hardware timer2"])
+    _, live_off = tx_bytes(t2_only(False), None, 20, extra=["info hardware timer2"])
+
+    def running(out):
+        m = re.search(r"timer2\[\d+\]\s+0x([0-9a-f]{4})\b(.*)", out)
+        return None if m is None else (int(m.group(1), 16), "ON" in m.group(2))
+
+    on_v, off_v = running(live_on), running(live_off)
+    check("sensitivity: clock out runs, and only when it is asked to",
+          on_v is not None and off_v is not None and on_v[0] > 0x10 and on_v[1] and
+          off_v == (0, False), "on=%s off=%s" % (on_v, off_v))
+
+
 if __name__ == "__main__":
     print("SIM =", SIM)
     leg_vectors()
@@ -470,6 +537,7 @@ if __name__ == "__main__":
     # /tmp/s51-ref-b is steps 1-6 + PCA fixes (identity yes, BRG no); /tmp/s51-ref predates the
     # identity and would pass these two checks vacuously.
     leg_reference_proof(os.environ.get("S51_REF", "/tmp/s51-ref-b"))
+    leg_baud_source_isolation()
     print("\nChecks run: %d  Failed: %d" % (_checks, len(_failures)))
     if _failures:
         print("FAILURES: " + ", ".join(_failures))

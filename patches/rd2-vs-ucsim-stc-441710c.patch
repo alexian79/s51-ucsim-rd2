@@ -318,7 +318,7 @@ index f7068d6..e3c5f03 100644
  public:
    cl_sim(class cl_app *the_app);
 diff --git a/ucsim/src/core/sim.src/uc.cc b/ucsim/src/core/sim.src/uc.cc
-index fcd8641..78c873c 100644
+index fcd8641..83e9260 100644
 --- a/ucsim/src/core/sim.src/uc.cc
 +++ b/ucsim/src/core/sim.src/uc.cc
 @@ -1147,6 +1147,8 @@ cl_uc::build_cmdset(class cl_cmdset *cmdset)
@@ -526,7 +526,7 @@ index fcd8641..78c873c 100644
        s= ln.c_str();
        ln.start_parse();
        w1= ln.token(" \t\v");
-@@ -1862,9 +2037,555 @@ cl_uc::read_map_file(cl_f *f)
+@@ -1862,9 +2037,558 @@ cl_uc::read_map_file(cl_f *f)
  	  break;
  	}
      }
@@ -536,9 +536,9 @@ index fcd8641..78c873c 100644
 +           "map this loader can read\n");
 +  lines->free_all();
 +  delete lines;
-   return cnt;
- }
- 
++  return cnt;
++}
++
 +/*
 + * SDAS (ASxxxx) symbol table: the `.sym' file
 + *
@@ -1059,15 +1059,18 @@ index fcd8641..78c873c 100644
 +  if (st.relative)
 +    sym_say(con, chars("", "sym: %ld name(s) are in relocatable areas: their value counts from the base of the area, which a .sym file does not record",
 +                       st.relative));
++  if (st.unusable)
++    sym_say(con, chars("", "sym: %ld name(s) could never be typed at the console (bit names such as ACC.0), so they are not bound",
++                       st.unusable));
 +
 +  for (t_index i= 0; i < st.rows->count; i++)
 +    delete (struct sym_row *)st.rows->at(i);
 +  st.rows->disconn_all();
 +  delete st.rows;
 +  delete[] st.areas;
-+  return cnt;
-+}
-+
+   return cnt;
+ }
+ 
 +
 +/*! \brief The rom: a machine with one address space has nothing to choose. */
 +class cl_memory *
@@ -1082,29 +1085,73 @@ index fcd8641..78c873c 100644
  static int h1(const char *s, int p)
  {
    int r= 0;
-@@ -2141,6 +2862,21 @@ cl_uc::read_file(chars nam, class cl_console_base *con, bool just_check)
+@@ -2115,29 +2839,46 @@ cl_uc::read_file(chars nam, class cl_console_base *con, bool just_check)
+       if (!application->quiet)
+ 	printf("%ld symbols read from %s\n", l, f->get_fname());
+     }
+-  if (strcmp(nam, f->get_fname()) != 0)
+-    {
+-      chars n= nam;
+-      n+= ".cdb";
+-      cl_f *c= mk_io(n, "r");
+-      if (c->opened())
+-	{
+-	  l= read_cdb_file(c);
+-	  if (!application->quiet)
+-	    printf("%ld symbols read from %s\n", l, c->get_fname());
+-	}
+-      delete c;
+-    }
+-  if (strcmp(nam, f->get_fname()) != 0)
++  /* Autoload the debug side-files that sit next to the image: a `<stem>.cdb', a
++     `<stem>.map' and a `<stem>.sym' are read whenever they exist.  The stem is the name as
++     it was typed with its own extension dropped, so naming the file exactly (`file
++     app.hex') behaves like naming its stem (`file app', whose extension had to be
++     guessed): the assembler writes app.hex and app.sym side by side whichever of the two is
++     typed, and the guard that stood here -- `strcmp(nam, f->get_fname()) != 0', true only
++     when an extension had been guessed -- made the symbols appear or vanish on that
++     accident of spelling (t/symtest.py pins both spellings now).  A side-file that is not
++     there costs one failed open. */
++  static const char *const side_ext[3]= { ".cdb", ".map", ".sym" };
++  chars stem= nam;
++  {
++    const char *np= nam.c_str();
++    const char *dot= strrchr(np, '.');
++    const char *slash= strrchr(np, '/');
++
++    if (dot && (!slash || dot > slash))
++      stem.substr(0, (int)(dot - np));
++  }
++  for (int i= 0; i < 3; i++)
+     {
+-      chars n= nam;
+-      n+= ".map";
++      chars n= stem;
++      n+= side_ext[i];
+       cl_f *c= mk_io(n, "r");
+       if (c->opened())
+ 	{
+-	  l= read_map_file(c);
+-	  if (!application->quiet)
+-	    printf("%ld symbols read from %s\n", l, c->get_fname());
++	  if (i == 2)
++	    {
++	      // the assembler's symbol table binds names, not words: `l' stays the
++	      // number of words the image itself contributed
++	      long sl= read_sym_file(c, con);
++	      if (!application->quiet)
++		printf("%ld symbols read from %s\n", sl, c->get_fname());
++	    }
++	  else
++	    {
++	      l= (i == 1) ? read_map_file(c) : read_cdb_file(c);
++	      if (!application->quiet)
++		printf("%ld symbols read from %s\n", l, c->get_fname());
++	    }
  	}
        delete c;
      }
-+  if (strcmp(nam, f->get_fname()) != 0)
-+    {
-+      chars n= nam;
-+      n+= ".sym";
-+      cl_f *c= mk_io(n, "r");
-+      if (c->opened())
-+	{
-+	  // the assembler's symbol table binds names, not words: `l' stays the
-+	  // number of words the image itself contributed
-+	  long sl= read_sym_file(c, con);
-+	  if (!application->quiet)
-+	    printf("%ld symbols read from %s\n", sl, c->get_fname());
-+	}
-+      delete c;
-+    }
-   delete f;
- 
-   if (!just_check)
-@@ -3163,22 +3899,42 @@ cl_uc::do_brk(void)
+@@ -3163,22 +3904,42 @@ cl_uc::do_brk(void)
    bool ret= false;
  
    if ((sim->state & SIM_GO) &&
@@ -1573,10 +1620,10 @@ index 03ef499..d068f2a 100644
  bool
 diff --git a/ucsim/src/sims/s51.src/rd2_boot.cc b/ucsim/src/sims/s51.src/rd2_boot.cc
 new file mode 100644
-index 0000000..b570676
+index 0000000..9aaf188
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_boot.cc
-@@ -0,0 +1,426 @@
+@@ -0,0 +1,436 @@
 +/*
 + * Simulator of microcontrollers (rd2_boot.cc)
 + *
@@ -1732,6 +1779,16 @@ index 0000000..b570676
 +     their content across a reset -- flash does, and the boot ROM is masked. */
 +  if (enboot_banker)
 +    enboot_banker->activate(0);
++
++  /* The counters are reset-scoped like every other element's (cl_rd2_spi::reset() zeroes
++     n_modf): `reset' is where a run starts over, so an `info hw bootrom' report printed
++     afterwards has to describe that run and not the whole session. */
++  n_calls= 0;
++  n_refused= 0;
++  n_written= 0;
++  n_erased= 0;
++  last_cmd= 0;
++  last_result= "no USER_CALL yet";
 +}
 +
 +
@@ -2144,10 +2201,10 @@ index 0000000..c022c8f
 +/* End of s51.src/rd2_bootcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_brg.cc b/ucsim/src/sims/s51.src/rd2_brg.cc
 new file mode 100644
-index 0000000..dccc979
+index 0000000..e19d09f
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_brg.cc
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,149 @@
 +/*
 + * Simulator of microcontrollers (rd2_brg.cc)
 + *
@@ -2189,11 +2246,13 @@ index 0000000..dccc979
 +      cell_brl= sfr->get_cell(BRL);
 +      cell_bdrcon= register_cell(sfr, BDRCON);
 +    }
-+  /* Name the registers for the console (dump sfr, print sfr, var).  They are not added to
-+     sfr_tab51 the way CKCON0 is, because that table is keyed purely by CPU type: the widest
-+     flag the family class answers to is CPU_89C51R, which also covers the AT89C51RB2/RC2,
-+     and that part has no BRG.  Naming them here keeps the name and the peripheral appearing
-+     and disappearing together.  Same var idiom as cl_51core::set_sfr_names (uc51.cc). */
++  /* Name the registers for the console (dump sfr, print sfr, var).  They are not in
++     sfr_tab51 the way CKRL is, and that is not only tidiness: cl_51core::init() runs
++     cl_uc::init() (which builds this element) before make_vars() (which applies the
++     table), and cl_var_list::add() deletes any var already carrying the name, so a table
++     row for these addresses would win and drop the descriptions below.  Naming them here
++     also keeps name and peripheral appearing and disappearing together.  Same idiom as
++     cl_51core::set_sfr_names (uc51.cc). */
 +  if (sfr && uc->vars)
 +    {
 +      uc->vars->add("BRL", sfr, BRL, 7, 0, "Baud rate generator reload value");
@@ -3165,10 +3224,10 @@ index 0000000..83d80ba
 +/* End of s51.src/rd2_kbdcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_motor.cc b/ucsim/src/sims/s51.src/rd2_motor.cc
 new file mode 100644
-index 0000000..ea81343
+index 0000000..8e1f1d4
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_motor.cc
-@@ -0,0 +1,829 @@
+@@ -0,0 +1,838 @@
 +/*
 + * Simulator of microcontrollers (rd2_motor.cc)
 + *
@@ -3241,6 +3300,15 @@ index 0000000..ea81343
 +  floor_reached= true;
 +  out_pos= 0.0;
 +  out_target= 0.0;
++
++  /* Slack starts at zero: the model comes up wound against the flank it is about to be
++     driven off, so the first move after power-on loses nothing to backlash.  A gearbox
++     parked inside its neutral zone would give up its play whichever way it is first driven,
++     but nothing on the part records which way that was, and zero is the one starting point
++     that makes a first measured move reproducible rather than an accident of the last
++     power-down.  A rig that wants play on the first move winds it up the way the model
++     does: drive one way, then reverse (see the reversal branch below, which sets slack to
++     the full gap). */
 +  slack= 0.0;
 +  out_side= 0;
 +  memset((void *)&cha, 0, sizeof(cha));
@@ -4000,10 +4068,10 @@ index 0000000..ea81343
 +/* End of s51.src/rd2_motor.cc */
 diff --git a/ucsim/src/sims/s51.src/rd2_motorcl.h b/ucsim/src/sims/s51.src/rd2_motorcl.h
 new file mode 100644
-index 0000000..f87cfb2
+index 0000000..6f54723
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_motorcl.h
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,229 @@
 +/*
 + * Rotary plant model for the AT89C51RD2/ED2 bench: a brushed DC motor, a gear train and a
 + * quadrature tach wheel, hanging off the pins the part already has.  This is NOT a
@@ -4075,12 +4143,14 @@ index 0000000..f87cfb2
 + * a full square wave on A -- high for half a period, low for the next -- and B is armed with
 + * the same wave delayed by a quarter period, so the quadrature order reverses with the sign
 + * of w and firmware can tell direction.  Both edges are emitted, which makes a counter's
-+ * reading independent of which edge it counts: this model's timers count RISING
-+ * (timer0.cc:393-409 tests (pins&latch) going 0->1) whereas a real 8051 counts FALLING.
-+ * That fidelity gap is recorded in SIMULATION-PLAN.md and is deliberately NOT "fixed" here;
-+ * emitting both edges is what designs around it.  A period shorter than period_min is
-+ * clamped and counted in `clamped'.  Below the emission floor both pins are released to 1
-+ * (a pull-up, not a driven 0) and that is recorded too.
++ * reading independent of which edge it counts.  That independence is load-bearing here: the
++ * counting polarity is *not* settled in this tree.  t0/t1 counter mode tests the pin going
++ * 0->1 (timer0.cc:393-409) while timer 2, the PCA and the external interrupts answer the
++ * 1->0 side, doc4235 as transcribed in this repository says nowhere which flank the counter
++ * gate answers, and SIMULATION-PLAN.md item 22 records the question as open.  Deciding it is
++ * deliberately NOT done here; emitting both edges is what designs around it.  A period
++ * shorter than period_min is clamped and counted in `clamped'.  Below the emission floor
++ * both pins are released to 1 (a pull-up, not a driven 0) and that is recorded too.
 + *
 + * BACKLASH is the classic lost-motion operator: while the input reverses, the output does
 + * not move; the slack is consumed taking up the gap and regenerated on reversal (a
@@ -4233,10 +4303,10 @@ index 0000000..f87cfb2
 +/* End of s51.src/rd2_motorcl.h */
 diff --git a/ucsim/src/sims/s51.src/rd2_spi.cc b/ucsim/src/sims/s51.src/rd2_spi.cc
 new file mode 100644
-index 0000000..826fd22
+index 0000000..c78862a
 --- /dev/null
 +++ b/ucsim/src/sims/s51.src/rd2_spi.cc
-@@ -0,0 +1,816 @@
+@@ -0,0 +1,819 @@
 +/*
 + * Simulator of microcontrollers (rd2_spi.cc)
 + *
@@ -4716,9 +4786,12 @@ index 0000000..826fd22
 +	 is a mode fault.  Level rather than edge, because table 16-4 bit 4 (printed
 +	 p. 71) says MODF is "Set by hardware to indicate that the SS pin is at
 +	 inappropriate logic level", and footnote 1 on printed p. 64 -- "Clearing SSDIS
-+	 control bit does not clear MODF" -- is only useful if a SS that is already low
-+	 is also caught the moment SSDIS is cleared. */
-+      if (!(ctl & bmSSDIS) && ss_low && !(spsta() & bmMODF))
++	 control bit does not clear MODF" -- is only useful if a SS that is already low is
++	 also caught the moment SSDIS is cleared.  The existing MODF flag must not be part
++	 of the test either: do_modf() clears SPEN, so re-enabling SPEN while SS is still
++	 low is a fresh mode fault, not a repeat of the old one -- gating on the flag let a
++	 transfer run under a still-faulted SS. */
++      if (!(ctl & bmSSDIS) && ss_low)
 +	{
 +	  do_modf();
 +	  return resGO;
@@ -5324,7 +5397,7 @@ index 9047f34..7b72756 100644
  
  #define bmTF2	 0x80
 diff --git a/ucsim/src/sims/s51.src/serial.cc b/ucsim/src/sims/s51.src/serial.cc
-index fa36098..4256347 100644
+index fa36098..25dc14f 100644
 --- a/ucsim/src/sims/s51.src/serial.cc
 +++ b/ucsim/src/sims/s51.src/serial.cc
 @@ -46,11 +46,17 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
@@ -5809,7 +5882,7 @@ index fa36098..4256347 100644
    s_rec_tick+= l;
    return(0);
  }
-@@ -353,12 +657,20 @@ cl_serial::reset(void)
+@@ -353,12 +657,23 @@ cl_serial::reset(void)
    s_rec_t1   = 0;
    s_tr_tick  = 0;
    s_rec_tick = 0;
@@ -5827,11 +5900,27 @@ index fa36098..4256347 100644
 +     clear_sfr does not run the peripheral write hook. */
 +  fe         = false;
 +  _bmSMOD0   = 0;
++  /* clear_sfr() zeroes T2CON without notifying us, so the cached baud-source flag has
++     to be dropped here too, exactly like fe above. */
++  t2_baud    = false;
  }
  
  void
-@@ -375,10 +687,23 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
- 	  t_mem auxr= s ? s->get(AUXR) : 0;
+@@ -370,15 +685,34 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
+ 	{
+ 	  /* Timer 1 baud — skip if BRT or Timer 2 is the baud source.
+ 	     AUXR.S1BRS (bit 0) selects BRT on STC12; AUXR.S1ST2 (bit 0)
+-	     selects Timer 2 on STC15. Both use the same bit. */
++	     selects Timer 2 on STC15. Both use the same bit, and only the STC
++	     parts have it -- every one of them carries CPU_STC12 in globals.cc,
++	     no Atmel part does.  On the AT89C51RD2 that address and bit is
++	     AUXR.AO, the ALE control used to cut EMI (doc4235 §9), which ordinary
++	     low-noise firmware sets on its own.  Reading it as a baud select made
++	     AO=1 discard every timer 1 overflow, so a mode 1/3 UART clocked by
++	     timer 1 never raised TI. */
+ 	  class cl_address_space *s= uc->address_space(MEM_SFR_ID);
+-	  t_mem auxr= s ? s->get(AUXR) : 0;
++	  t_mem auxr= ((uc->type->type & CPU_STC12) && s) ? s->get(AUXR) : 0;
  	  if (!(auxr & 0x01)) /* S1BRS/S1ST2 not set → Timer 1 is baud source */
  	    {
 -	      s_rec_t1++;
@@ -5856,13 +5945,20 @@ index fa36098..4256347 100644
        if (where->id == 3 /* STC12 BRT */)
  	{
  	  s_rec_t1++;
-@@ -398,8 +723,11 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
+@@ -398,8 +732,18 @@ cl_serial::happen(class cl_hw *where, enum hw_event he, void *params)
  		break;
  	      }
  	    case EV_OVERFLOW:
 -	      s_rec_t1++;
 -	      s_tr_t1++;
 +	      /* Same rule as timer 1: TCLK/RCLK are don't care for a direction the BRG owns. */
++	      /* Only a timer 2 that is actually driving the baud clock may advance the
++		 timer-1 counters.  On the AT89C51RD2 clock out (T2MOD.T2OE) wins the one
++		 `mode` variable, and its reload overflow is published as EV_OVERFLOW as
++		 well; counting that made the EUart run fast whenever clock out was active
++		 under stale RCLK/TCLK bits.  t2_baud now follows the mode in effect. */
++	      if (!t2_baud)
++	        break;
 +	      if (!brg_drives(false))
 +		s_rec_t1++;
 +	      if (!brg_drives(true))
@@ -5870,7 +5966,7 @@ index fa36098..4256347 100644
  	      break;
  	    default: break;
  	    }
-@@ -430,6 +758,14 @@ cl_serial::print_info(class cl_console_base *con)
+@@ -430,6 +774,14 @@ cl_serial::print_info(class cl_console_base *con)
    con->dd_printf("%s", modes[mode]);
    if (mode == 1 || mode == 2)
      con->dd_printf(" (timer%d)", (t2_baud)?2:1);
@@ -6009,7 +6105,7 @@ index 1ea1212..764393c 100644
      {
      case 0: do_mode0(cycles); break;
 diff --git a/ucsim/src/sims/s51.src/timer2.cc b/ucsim/src/sims/s51.src/timer2.cc
-index ef4a20e..dbe09fb 100644
+index ef4a20e..869c465 100644
 --- a/ucsim/src/sims/s51.src/timer2.cc
 +++ b/ucsim/src/sims/s51.src/timer2.cc
 @@ -28,6 +28,7 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
@@ -6020,10 +6116,39 @@ index ef4a20e..dbe09fb 100644
  
  
  cl_timer2::cl_timer2(class cl_uc *auc, int aid, const char *aid_string,
-@@ -118,6 +119,16 @@ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
- 	mode= T2MODE_BAUDRATE;
-       else
- 	mode= T2MODE_OFF;
+@@ -79,6 +80,17 @@ cl_timer2::added_to_uc(void)
+   uc->it_sources->add(exf2it);
+ }
+ 
++/* The mode implied by a T2CON value by itself.  T2MOD.T2OE overrides this on the parts
++   that have the bit (doc4235 §12.2 makes clock out an operating mode, not a side flag),
++   so both write paths have to be able to ask the question and get the same answer. */
++int
++cl_timer2::mode_from_tcon(t_mem n)
++{
++  if (!(n & (mask_RCLK | mask_TCLK)))
++    return (n & mask_CP_RL2) ? T2MODE_CAPTURE : T2MODE_RELOAD;
++  return T2MODE_BAUDRATE;
++}
++
+ void
+ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
+ {
+@@ -108,22 +120,34 @@ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
+       TCLK= n & mask_TCLK;
+       CP_RL2= n & mask_CP_RL2;
+       EXEN2 = n & bmEXEN2;
+-      if (!(RCLK || TCLK) &&
+-	  !CP_RL2)
+-	mode= T2MODE_RELOAD;
+-      else if (!(RCLK || TCLK) &&
+-	       CP_RL2)
+-	mode= T2MODE_CAPTURE;
+-      else if (RCLK || TCLK)
+-	mode= T2MODE_BAUDRATE;
+-      else
+-	mode= T2MODE_OFF;
++      mode= mode_from_tcon(n);
 +      // T2OE is not part of the T2CON mode selection, and doc4235 §12.2 programs it
 +      // before the TR2 write that starts the timer, so the mode it picks has to survive
 +      // this write.  The bit comes from the register, not from the cached copy, because
@@ -6034,10 +6159,43 @@ index ef4a20e..dbe09fb 100644
 +          cell_t2mod &&
 +          (cell_t2mod->get() & bmT2OE))
 +        mode= T2MODE_CLKOUT;
++      /* A timer 2 sitting in clock out mode is not driving the baud clock even though
++	 RCLK/TCLK may still be set underneath, so partners must not be told otherwise. */
++      if (mode == T2MODE_CLKOUT)
++        n&= ~(mask_RCLK | mask_TCLK);
        inform_partners(EV_T2_MODE_CHANGED, &n);
      }
    else if (cell == cell_t2mod)
-@@ -145,6 +156,8 @@ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
+     {
+       bit_dcen= (*val & bmDCEN) != 0;
+       bit_t2oe= (*val & bmT2OE) != 0;
++      /* Clearing T2OE gives the mode back to T2CON: doc4235 §12.2 makes clock out one of
++	 timer 2's operating modes, not an addition to one.  Nothing did this, so mode
++	 stayed T2MODE_CLKOUT until the next T2CON write and TL2 kept counting at 3 per
++	 machine cycle with the pin toggling.  A part without the bit can never have mode
++	 == T2MODE_CLKOUT, so this cannot disturb it. */
++      if (!bit_t2oe && mode == T2MODE_CLKOUT)
++        mode= mode_from_tcon(cell_tcon->get());
+       if ((features & t2_down) &&
+ 	  bit_dcen &&
+ 	  mode == T2MODE_RELOAD)
+@@ -135,6 +159,15 @@ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
+       if ((features & t2_clock_out) &&
+           bit_t2oe)
+         mode= T2MODE_CLKOUT;
++      if (mode != oldmode)
++        {
++          /* Same contract as the T2CON path below: report the mode that is actually in
++             effect, i.e. the baud bits only when timer 2 really drives the baud clock. */
++          t_mem nn= cell_tcon->get();
++          if (mode != T2MODE_BAUDRATE)
++            nn&= ~(mask_RCLK | mask_TCLK);
++          inform_partners(EV_T2_MODE_CHANGED, &nn);
++        }
+     }
+   if ((mode != oldmode) ||
+       (TR && !oldtr) ||
+@@ -145,6 +178,8 @@ cl_timer2::write(class cl_memory_cell *cell, t_mem *val)
  int
  cl_timer2::tick(int cycles)
  { 
@@ -6046,7 +6204,7 @@ index ef4a20e..dbe09fb 100644
    switch (mode)
      {
      case T2MODE_BAUDRATE:
-@@ -187,7 +200,13 @@ cl_timer2::do_t2_baud(int cycles)
+@@ -187,7 +222,13 @@ cl_timer2::do_t2_baud(int cycles)
    if (C_T)
      (cycles= T_edge), T_edge= 0;
    else
@@ -6061,7 +6219,7 @@ index ef4a20e..dbe09fb 100644
  
    while (cycles--)
      {
-@@ -224,10 +243,16 @@ cl_timer2::do_t2_capture(int cycles)
+@@ -224,10 +265,16 @@ cl_timer2::do_t2_capture(int cycles)
    if (C_T)
      (cycles= T_edge), T_edge= 0;
  
@@ -6081,7 +6239,7 @@ index ef4a20e..dbe09fb 100644
      }
  }
  
-@@ -253,13 +278,17 @@ cl_timer2::do_t2_reload(int cycles)
+@@ -253,13 +300,17 @@ cl_timer2::do_t2_reload(int cycles)
    if (C_T)
      (cycles= T_edge), T_edge= 0;
  
@@ -6104,7 +6262,7 @@ index ef4a20e..dbe09fb 100644
  	}
      }
  }
-@@ -334,7 +363,12 @@ cl_timer2::do_t2_clock_out(int cycles)
+@@ -334,7 +385,12 @@ cl_timer2::do_t2_clock_out(int cycles)
    if (C_T)
      (cycles= T_edge), T_edge= 0;
    else
@@ -6119,11 +6277,17 @@ index ef4a20e..dbe09fb 100644
    while (cycles--)
      {
 diff --git a/ucsim/src/sims/s51.src/timer2cl.h b/ucsim/src/sims/s51.src/timer2cl.h
-index 2cc9cc1..7f482c5 100644
+index 2cc9cc1..aedba26 100644
 --- a/ucsim/src/sims/s51.src/timer2cl.h
 +++ b/ucsim/src/sims/s51.src/timer2cl.h
-@@ -64,6 +64,11 @@ protected:
+@@ -62,8 +62,17 @@ protected:
+   long t2ex_edge;
+   class cl_memory_cell *cell_rcap2l, *cell_rcap2h, *cell_t2mod;
    bool bit_dcen, bit_t2oe, bit_t2ex;
++  // The mode a T2CON value asks for on its own.  Both write paths need the answer: the
++  // T2CON path picks the mode from it, the T2MOD path needs it to hand the mode back
++  // when T2OE is cleared.
++  int mode_from_tcon(t_mem n);
  public:
    cl_timer2(class cl_uc *auc, int aid, const char *aid_string, int afeautres);
 +
@@ -6135,10 +6299,10 @@ index 2cc9cc1..7f482c5 100644
    //virtual const char *cfg_help(t_addr addr);
  
 diff --git a/ucsim/src/sims/s51.src/uc51.cc b/ucsim/src/sims/s51.src/uc51.cc
-index 37edd9f..111fb85 100644
+index 37edd9f..790c288 100644
 --- a/ucsim/src/sims/s51.src/uc51.cc
 +++ b/ucsim/src/sims/s51.src/uc51.cc
-@@ -187,34 +187,64 @@ static struct name_entry sfr_tab51[]=
+@@ -187,34 +187,66 @@ static struct name_entry sfr_tab51[]=
    {CPU_ALL_52|CPU_251,            0xcc, "TL2"},
    {CPU_ALL_52|CPU_251,            0xcd, "TH2"},
  
@@ -6189,8 +6353,10 @@ index 37edd9f..111fb85 100644
 +   * gives it (0xc7) and its bit-access address 0xe8, a separate cell in this model,
 +   * gets its own label rather than silently stealing the name from 0xc7. */
 +  {CPU_89C51RD2,                0x97, "CKRL"},
-+  {CPU_89C51RD2,                0x9a, "BRL"},
-+  {CPU_89C51RD2,                0x9b, "BDRCON"},
++  /* BRL (0x9a) and BDRCON (0x9b) are deliberately NOT named here: cl_rd2_brg names them
++     with their field descriptions, cl_51core::init() builds the peripherals before
++     make_vars() runs, and cl_var_list::add() deletes any var already carrying the name --
++     so a row here would silently replace those bindings with an empty description. */
 +  {CPU_89C51RD2,                0x9c, "KBLS"},
 +  {CPU_89C51RD2,                0x9d, "KBE"},
 +  {CPU_89C51RD2,                0x9e, "KBF"},
@@ -6229,7 +6395,7 @@ index 37edd9f..111fb85 100644
  
    {CPU_F380, 0x8e, "CKCON"},
    {CPU_F380, 0x8f, "PSCTL"},
-@@ -399,7 +429,7 @@ static struct name_entry bit_tab51[]=
+@@ -399,7 +431,7 @@ static struct name_entry bit_tab51[]=
    /* IE */
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0xaf, "EA"},
    {CPU_DS390|CPU_DS390F,          0xae, "ES1"},
@@ -6238,7 +6404,7 @@ index 37edd9f..111fb85 100644
    {CPU_ALL_52|CPU_251,            0xad, "ET2"},
    {CPU_DS390|CPU_DS390F,          0xac, "ES0"},
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0xac, "ES"},
-@@ -408,7 +438,7 @@ static struct name_entry bit_tab51[]=
+@@ -408,7 +440,7 @@ static struct name_entry bit_tab51[]=
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0xa9, "ET0"},
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0xa8, "EX0"},
    /* IP */
@@ -6247,7 +6413,7 @@ index 37edd9f..111fb85 100644
    {CPU_DS390|CPU_DS390F,  0xbe, "PS1"},
    {CPU_ALL_52,            0xbd, "PT2"},
    {CPU_DS390|CPU_DS390F,  0xbc, "PS0"},
-@@ -435,7 +465,7 @@ static struct name_entry bit_tab51[]=
+@@ -435,7 +467,7 @@ static struct name_entry bit_tab51[]=
    {CPU_DS390|CPU_DS390F,          0x99, "TI_0"},
    {CPU_DS390|CPU_DS390F,          0x98, "RI_0"},
  
@@ -6256,7 +6422,7 @@ index 37edd9f..111fb85 100644
    {CPU_ALL_51|CPU_ALL_52,         0x9f, "SM0"},
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0x9e, "SM1"},
    {CPU_ALL_51|CPU_ALL_52|CPU_251, 0x9d, "SM2"},
-@@ -463,22 +493,22 @@ static struct name_entry bit_tab51[]=
+@@ -463,22 +495,22 @@ static struct name_entry bit_tab51[]=
    {CPU_ALL_52|CPU_251, 0xc9, "C/T2"},
    {CPU_ALL_52|CPU_251, 0xc8, "CP/RL2"},
    /* CCON */
@@ -6294,7 +6460,7 @@ index 37edd9f..111fb85 100644
    /* WDCON */
    {CPU_DS390|CPU_DS390F, 0xdf, "SMOD_1"},
    {CPU_DS390|CPU_DS390F, 0xde, "POR,"},
-@@ -506,6 +536,29 @@ static struct name_entry bit_tab51[]=
+@@ -506,6 +538,29 @@ static struct name_entry bit_tab51[]=
    {CPU_DS390|CPU_DS390F, 0xea, "PX4"},
    {CPU_DS390|CPU_DS390F, 0xe9, "PX3"},
    {CPU_DS390|CPU_DS390F, 0xe8, "PX2"},
@@ -6324,7 +6490,7 @@ index 37edd9f..111fb85 100644
  
    {0, 0, NULL}
  };
-@@ -1340,6 +1393,68 @@ cl_51core::make_vars(void)
+@@ -1340,6 +1395,68 @@ cl_51core::make_vars(void)
      }
  }
  
@@ -6393,7 +6559,7 @@ index 37edd9f..111fb85 100644
  /*
   * Destroying the micro-controller object
   */
-@@ -2062,6 +2177,21 @@ cl_51core::do_interrupt(void)
+@@ -2062,6 +2179,21 @@ cl_51core::do_interrupt(void)
    if (!((ie= sfr->get(IE)) & bmEA))
      return(resGO);
    class it_level *il= (class it_level *)(it_levels->top()), *IL= 0;
@@ -6415,7 +6581,7 @@ index 37edd9f..111fb85 100644
    for (i= 0; i < it_sources->count; i++)
      {
        class cl_it_src *is= (class cl_it_src *)(it_sources->at(i));
-@@ -2069,34 +2199,102 @@ cl_51core::do_interrupt(void)
+@@ -2069,34 +2201,102 @@ cl_51core::do_interrupt(void)
  	  is->enabled() &&
  	  is->pending())
  	{
@@ -6559,7 +6725,7 @@ index 6895884..f1077d9 100644
    virtual struct name_entry *bit_tbl(void);
    virtual char *disass(t_addr addr);
 diff --git a/ucsim/src/sims/s51.src/uc89c51r.cc b/ucsim/src/sims/s51.src/uc89c51r.cc
-index 604265d..eb031a6 100644
+index 604265d..bf2e273 100644
 --- a/ucsim/src/sims/s51.src/uc89c51r.cc
 +++ b/ucsim/src/sims/s51.src/uc89c51r.cc
 @@ -34,12 +34,29 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
@@ -6631,7 +6797,7 @@ index 604265d..eb031a6 100644
  }
  
  void
-@@ -76,16 +119,440 @@ cl_uc89c51r::make_memories(void)
+@@ -76,16 +119,443 @@ cl_uc89c51r::make_memories(void)
    cl_uc52::make_memories();
  }
  
@@ -6897,9 +7063,12 @@ index 604265d..eb031a6 100644
 +  sfr->write(RD2_P5, 0xff);
 +  sfr->write(RD2_P5_BIT, 0xff);
 +  // ClocK ReLoad: 1111 1111b is the documented prescaler bypass (doc4235 section 7).
-+  // The divider itself is not modelled, so this only keeps the register honest.
++  // The divider itself is cl_uc89c51r::ckrl_divider(), measured by t/ckrltest.py.
 +  sfr->write(CKRL, 0xff);
-+  // SPI control: 0001 0100b, i.e. SSDIS=1 and CPHA=1 while SPEN keeps it disabled.
++  // SPI control: 0001 0100b.  Table 16-3 (printed p. 69) orders SPCON as
++  // SPR2 SPEN SSDIS MSTR CPOL CPHA SPR1 SPR0, so this reset value is MSTR set and CPHA
++  // set with SPEN *and* SSDIS clear: the part comes up master, edge 2, SPI disabled, and
++  // SS handling live from the first SPEN write.  `info hw spi' prints the same decoding.
 +  sfr->write(SPCON, 0x14);
 +  sfr->write(SPSTA, 0x00);   // 0000 0000b here, 00X0 XXXXb in Table 16-4
 +  sfr->write(SPDAT, 0x00);   // "indeterminate" in the datasheet; 0 is the quiet choice

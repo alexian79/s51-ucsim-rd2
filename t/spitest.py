@@ -542,6 +542,34 @@ def leg_modf():
                   marker == 1, "marker=%s" % marker)
 
 
+def leg_modf_rearm():
+    """Footnote 1 on printed p. 64 together with section 16.3.3.1 (printed p. 68): a mode
+    fault is the SS *level*, and the SPSTA read plus the SPCON write only clears the *flag*
+    -- "SPEN may then be restored to its prior state" restores the fault with it.  Two
+    service routines restore SPEN under an SS that is still held low: one runs the
+    documented clear sequence first, one writes SPCON straight away and so leaves MODF set.
+    The second is where a model that treats "MODF is already set" as "this pin has already
+    been reported" goes wrong: the byte shifts out under an SS the part is still calling an
+    inappropriate logic level.  Final SPEN/MSTR are deliberately not asserted -- where
+    `steps' stops inside the routine decides those; the counters do not depend on it."""
+    for clears_flag, name in ((True, "rearm-clear"), (False, "rearm-dirty")):
+        body = (inc(MARKER) + (ad(SPSTA) if clears_flag else [])
+                + d(SPCON, BM_SPEN | BM_MSTR | BM_CPHA) + reti())
+        code = (d(MARKER, 0) + d(P1, 0xff & ~SS) + d(SPCON, BM_SPEN | BM_MSTR | BM_CPHA)
+                + d(IE, BM_EA) + d(IEN1, BM_ESPI) + ai(0x5a) + da(SPDAT) + sjmp())
+        pad_to(code, SPI_VECTOR)
+        code += body
+        p = image(code, name)
+        st, marker, _ = probed(p, steps=60)
+        check("%s: restoring SPEN with SS still low faults again (%s): the receiver/error "
+              "request is raised more than once, the routine is entered more than once, and "
+              "no byte ever completes" % (name, "flag cleared first" if clears_flag
+                                          else "MODF left set"),
+              st is not None and st.get("modf_events", 0) >= 2 and marker >= 2
+              and st.get("bytes") == 0,
+              st["text"].replace("\n", " | ") if st else "no element")
+
+
 def leg_pins_are_shared():
     """P1 is one latch shared with T2/T2EX, ECI and CEX0..CEX4 (table 4-1, printed
     pp. 11-12), so every SPI pin write must be a read-modify-write: the five bits that
@@ -802,6 +830,7 @@ if __name__ == "__main__":
     leg_wcol()
     leg_interrupt()
     leg_modf()
+    leg_modf_rearm()
     leg_pins_are_shared()
     leg_spen_off_is_inert()
     leg_slave_mode()

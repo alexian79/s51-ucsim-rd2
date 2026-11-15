@@ -23,8 +23,8 @@ redistributed here. To reproduce the exact tree every suite in `t/` was run agai
     # the ../ is needed: `git -C` resolves the patch path against the target directory
     ./build.sh
 
-The patch touches **40 files**: 28 modified (+2514 / -192, measured 2026-11-15) and 12 added
-(`rd2_boot`, `rd2_brg`, `rd2_eeprom`, `rd2_kbd`, `rd2_motor`, `rd2_spi` and their `*cl.h`, 3539
+The patch touches **40 files**: 28 modified (+2597 / -223, measured 2026-11-15) and 12 added
+(`rd2_boot`, `rd2_brg`, `rd2_eeprom`, `rd2_kbd`, `rd2_motor`, `rd2_spi` and their `*cl.h`, 3565
 lines). Four files the working tree also
 changes are deliberately left out — `ucsim/src/common.mk`, `ucsim/src/packages.mk`,
 `ucsim/src/core/utils.src/ddconfig.h`, `ucsim/docs/Makefile` — because they are `./configure` output

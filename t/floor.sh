@@ -26,6 +26,14 @@ for f in kbdtest spitest ckrltest bootromtest eepromtest t2cnttest bpcmdtest wpt
   [ -f "t/$f.py" ] && SUITES="$SUITES $f"
 done
 
+# Strays that already existed when the floor started.  The check at the end counts only consoles
+# that appeared during the run: an unrelated console left behind by some earlier session is worth
+# printing, but calling it this run's leak fails a bed that is green and hides the count that
+# matters.  It happened on 2026-11-15: a console from the review session outlived that session by
+# half an hour and every floor started after it reported process-leak(1).
+PRE=$(ps -eo pid=,ppid=,args= | awk '$2 == 1 && (/-t 89C51/ || /ucsim/) {print $1}')
+PRE_N=$(printf '%s\n' "$PRE" | grep -c . || true)
+
 fail=0; names=""
 for s in $SUITES; do
   [ -f "t/$s.py" ] || { printf '%-14s MISSING\n' "$s"; fail=$((fail+1)); continue; }
@@ -58,11 +66,20 @@ done
 # builds this bed compares against are not called ucsim_*, and a name-only pattern walked straight
 # past eleven orphaned consoles once.  Only PPID 1 rows count, which excludes every suite's own
 # children -- and this check's own ps/awk -- by construction.
-strays=$(ps -eo ppid=,args= | awk '$1 == 1 && (/-t 89C51/ || /ucsim/)' | wc -l)
-if [ "$strays" -ne 0 ]; then
-  printf 'hygiene: %s reparented simulator console(s) survived this run\n' "$strays"
+POST=$(ps -eo pid=,ppid=,args= | awk '$2 == 1 && (/-t 89C51/ || /ucsim/)' | grep . || true)
+NEW=$(printf '%s\n' "$POST" | awk -v pre="$PRE" '
+  BEGIN { n = split(pre, p, " "); for (i = 1; i <= n; i++) if (p[i] != "") seen[p[i]] = 1 }
+  $1 != "" && !($1 in seen)')
+NEW_N=$(printf '%s\n' "$NEW" | grep -c . || true)
+if [ "$NEW_N" -ne 0 ]; then
+  printf 'hygiene: %s reparented simulator console(s) leaked during this run\n' "$NEW_N"
+  printf '%s\n' "$NEW" | cut -c1-110
+  fail=$((fail+1)); names="$names process-leak($NEW_N)"
+fi
+if [ "$PRE_N" -ne 0 ]; then
+  printf 'hygiene: %s console(s) were already reparented before this run (not counted, but they\n' "$PRE_N"
+  printf '           burn a core: kill them)\n'
   ps -eo pid=,ppid=,etimes=,args= | awk '$2 == 1 && (/-t 89C51/ || /ucsim/)' | cut -c1-110
-  fail=$((fail+1)); names="$names process-leak($strays)"
 fi
 echo "binary: $BIN"
 echo "floor: $fail suite(s) not green${names:+ --$names}"

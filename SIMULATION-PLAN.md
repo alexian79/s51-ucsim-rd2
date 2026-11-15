@@ -71,7 +71,7 @@ ignoring `cycles` was invisible until `peripheral_cycles()` started returning 0 
 |---|---|---|---|
 | 80C52 core, 256 B IRAM, upper-128 indirect-only | §3, §9 | **MODELLED** | `up128.hex`; `iram_chip` 256 + separate `sfr_chip` at 0x80 |
 | 64 K flash as code space | §1 | **MODELLED** as plain ROM; writable **only** through the API below | `rom_chip` 0x0000-0xffff; no console or `MOVX` path writes it (see §2.7), the IAP commands re-program it |
-| 2048 B boot ROM, `AUXR1.ENBOOT`, on-chip Flash API | §24; table 8-1 p.21; table 24-10 p.112 | **MODELLED** (Phase 5 items 14-15, 2026-11-14) | `cl_rd2_boot` (`rd2_boot.cc`, `RD2_BOOT_ID 16`): `ENBOOT` (0xA2.5) decoder, ROM mapped over `F800–FFFF`, `USER_CALL` at `FFF0` dispatching READ ID (×4) / ERASE BLOCK / PROGRAM DATA BYTE / PROGRAM DATA PAGE, refused by name and counted when `ENBOOT` is clear, `RET` issued by the model so the mandatory `LCALL` returns; `t/bootromtest.py` 68/68. **NOT** modelled: security bytes `05h`/`06h`/`07h`, fuses and HSB `0Ah`/`0Bh`, boot ID/version `0Eh`/`0Fh`, §24.9 serial bootloader, `tWRITE` (0 cycles by decision), host-side backing file |
+| 2048 B boot ROM, `AUXR1.ENBOOT`, on-chip Flash API | §24; table 8-1 p.21; table 24-10 p.112 | **MODELLED** (Phase 5 items 14-15, 2026-11-14) | `cl_rd2_boot` (`rd2_boot.cc`, `RD2_BOOT_ID 16`): `ENBOOT` (0xA2.5) decoder, ROM mapped over `F800–FFFF`, `USER_CALL` at `FFF0` dispatching READ ID (×4) / ERASE BLOCK / PROGRAM DATA BYTE / PROGRAM DATA PAGE, refused by name and counted when `ENBOOT` is clear, `RET` issued by the model so the mandatory `LCALL` returns; `t/bootromtest.py` 70/70. **NOT** modelled: security bytes `05h`/`06h`/`07h`, fuses and HSB `0Ah`/`0Bh`, boot ID/version `0Eh`/`0Fh`, §24.9 serial bootloader, `tWRITE` (0 cycles by decision), host-side backing file |
 | 1792 B XRAM, `AUXR.XRS` window + `EXTRAM` | §9, AUXR `8Eh` bits 4:2 / 1 | **MODELLED** | `decode_xram()` (`uc89c51r.cc:157-195`), `xramtest.py` 10/10 |
 | dual DPTR, `AUXR1.DPS` bit 0 | §8 | **MODELLED** | `cl_banker` via `cfg_set(uc51cpu_aof_mdpc, 0xA2)` + mask 1 (`uc89c51r.cc:52-58`); `dptr2`/`rmwtest` 10/10/`banktest` 3/3 |
 | `AUXR1.GF3`(3), `PCON.GF0/GF1` | Table 3-2 | **INERT** (acceptable — general flags are RAM by definition) | no reader |
@@ -94,8 +94,8 @@ ignoring `cycles` was invisible until `peripheral_cycles()` started returning 0 
 | feature | doc4235 | status | evidence |
 |---|---|---|---|
 | modes 0-3, classic baud from T1/T2, `PCON.SMOD1` doubling | §14 | **MODELLED** | `serial.cc:167-206` `_divby`; `hwtest.py` 8/8 incl. both T2-baud and SMOD |
-| internal BRG: `BRL` `9Ah`, `BDRCON` `9Bh` (`BRR` run gate, `TBCK`/`RBCK` per-direction select, `SPD` ÷6 bypass, `SRC` also feeds mode 0) | Table 3-7, §14 | **MODELLED** (Phase 2) | `rd2_brg.cc` registered from `cl_uc89c51rd2::mk_hw_elements()`, picked up by `cl_serial` through `new_hw_added()`; `t/euarttest.py` 34 checks pin the Tables 14-5/14-6 vectors, the `BRR` gate, `TBCK`/`RBCK` making `TCLK`/`RCLK` don't-care (22 references, Table 14-3 quoted at `:283`), the `SPD` bypass and the `SRC` mode-0 select. Before this, `TBCK=1`/`RBCK=1` silently fell back to a timer |
-| BRG clock = `FCLK_PERIPH` = `Fosc/2` Standard, `Fosc` in X2 | §6 + Fig. 14-5 | **MODELLED** (Phase 2) | `rd2_brg.cc`; `t/euarttest.py` 34 checks reproduce Tables 14-5/14-6 to the clock, which is the only reading that does so (§5 vectors, hand-checked). Machine cycle is `Fosc/12`/`Fosc/6`, so the ratio is **one BRG count per 6 machine cycles, identical in both modes**; `SPD`=1 removes a further ÷6 |
+| internal BRG: `BRL` `9Ah`, `BDRCON` `9Bh` (`BRR` run gate, `TBCK`/`RBCK` per-direction select, `SPD` ÷6 bypass, `SRC` also feeds mode 0) | Table 3-7, §14 | **MODELLED** (Phase 2) | `rd2_brg.cc` registered from `cl_uc89c51rd2::mk_hw_elements()`, picked up by `cl_serial` through `new_hw_added()`; `t/euarttest.py` 38 checks pin the Tables 14-5/14-6 vectors, the `BRR` gate, `TBCK`/`RBCK` making `TCLK`/`RCLK` don't-care (22 references, Table 14-3 quoted at `:283`), the `SPD` bypass and the `SRC` mode-0 select. Before this, `TBCK=1`/`RBCK=1` silently fell back to a timer |
+| BRG clock = `FCLK_PERIPH` = `Fosc/2` Standard, `Fosc` in X2 | §6 + Fig. 14-5 | **MODELLED** (Phase 2) | `rd2_brg.cc`; `t/euarttest.py` 38 checks reproduce Tables 14-5/14-6 to the clock, which is the only reading that does so (§5 vectors, hand-checked). Machine cycle is `Fosc/12`/`Fosc/6`, so the ratio is **one BRG count per 6 machine cycles, identical in both modes**; `SPD`=1 removes a further ÷6 |
 | multiprocessor addressing: `SADDR` `A9h`, `SADEN` `B9h`, `SM2` | §14 | **MODELLED** (Phase 2, steps 12-13) | named under `CPU_51R|CPU_89C51R|CPU_251` (`uc51.cc:192,194`), reset to 0 (`uc51r.cc:109-119`), and read by the receive path in `serial.cc`; `t/uartmp.py` 19 checks run the address-match matrix (including `SADEN` don't-care bits and `SM2` gating on data vs address frames) |
 | `SCON.7` is a mux: `PCON.SMOD0`=1 makes it `FE` (framing error) and hides `SM0` | §14 pp. 48, 53 | **MODELLED** (Phase 2, steps 12-13) | `t/uartmp.py` pins the whole rule: a bad stop bit sets `FE`, `FE` is sticky (a later good stop bit does *not* clear it — the suite quotes the datasheet sentence and asserts it), and with the feature on `RI` moves off the last data bit onto the stop bit; the 9th-bit/stop-bit input is fed by the `-S in=` batch channel |
 | RX from batch mode | — | **BROKEN** | `serconf_check_often` registration commented out at `serial.cc:88-92` (README) |
@@ -125,7 +125,7 @@ ignoring `cycles` was invisible until `peripheral_cycles()` started returning 0 
 | T0/T1 modes 0-2, gate/C-T | §5,§6 | **MODELLED** | `hwtest.py` |
 | T2 capture / auto-reload / baud / `EXF2` | §12 | **MODELLED** | baud path fixed locally (`do_t2_baud`'s `*= 6` gated to 1T parts + `serial.cc` `_divby` 16→32, together the 12× that read 8 MC/bit); `while (cycles--)` in `do_t2_reload`/`do_t2_capture` only matters under `T2X2`, see §1.1; `hwtest.py` |
 | T2 down counter | §12 | enabled | `t2_default\|t2_down` (`uc52.cc:64`) |
-| T2 clock output on P1.0 (`T2MOD.T2OE`) | §12, Table 12-2 p.34 | **MODELLED** | `uc89c51r.cc:85` adds the `t2_clock_out` feature this part documents — precisely the flag `timer2.cc:128`/`:146` gate on — so `T2OE` beats the `T2CON` modes and `P1.0` toggles off the `TL2` path: measured 16 MC low, 16 MC high, 32 MC period, 4 oscillator clocks per `TL2` count, `CKRL` multiplying only the clock cost. `t/t2oetest.py` 7/7 reads the wave from the P1 **latch** (a port-bit read answers 0), `t/ckrltest.py` pins the period in both clock states. Logged here as **ABSENT (inert bit)** until 2026-11-13 — see the superseded D7 |
+| T2 clock output on P1.0 (`T2MOD.T2OE`) | §12, Table 12-2 p.34 | **MODELLED** | `uc89c51r.cc:85` adds the `t2_clock_out` feature this part documents — precisely the flag `timer2.cc:128`/`:146` gate on — so `T2OE` beats the `T2CON` modes and `P1.0` toggles off the `TL2` path: measured 16 MC low, 16 MC high, 32 MC period, 4 oscillator clocks per `TL2` count, `CKRL` multiplying only the clock cost. `t/t2oetest.py` 9/9 reads the wave from the P1 **latch** (a port-bit read answers 0), `t/ckrltest.py` pins the period in both clock states. Logged here as **ABSENT (inert bit)** until 2026-11-13 — see the superseded D7 |
 | PCA: 5 modules, capture / MAT / TOG / 8-bit PWM | §13, Tables 3-6, 13-1 | **MODELLED** | `pca.cc` (`bmPWM` at 243/307), PWM polarity fixed in this fork |
 | PCA CEX0-4/ECI edges from **P1** | §13 | **MODELLED** | `cl_pca::happen()` on `EV_PORT_CHANGED`, `ep->id == 1` (`pca.cc:330-354`) |
 | PCA clock select `CPS1:CPS0` | Table 13-1, pp. 36-37 | **MODELLED**, correct 2-bit width (RD2 has no `CPS2`) | the encoding is printed on the *continuation* page p.37: `00` FCLK_PERIPH/6, `01` FCLK_PERIPH/2, `10` T0 overflow, `11` external clock at ECI/P1.2. `pca.cc:210-228` yields 1 : 3 counts per machine cycle = FCLK_PERIPH/6 : /2 in Standard mode |
@@ -303,7 +303,7 @@ RD2 now calls `add_features(t2_clock_out)` (`uc89c51r.cc:85`), which is exactly 
 (§12.2 programs the bit before the `TR2` write that starts the timer, which is why
 `do_t2_con_write` re-reads `T2MOD` instead of trusting the cached copy), and the measured wave is 16
 machine cycles low, 16 high, a 32-cycle period at 4 oscillator clocks per `TL2` count, with `CKRL`
-multiplying only its clock cost (`t/t2oetest.py` 7/7, `t/ckrltest.py`). Read `P1.0` out of the P1
+multiplying only its clock cost (`t/t2oetest.py` 9/9, `t/ckrltest.py`). Read `P1.0` out of the P1
 latch with `dump sfr[0x90]` — a port *bit* read answers 0 whatever the latch holds, which is what
 made this look unmodellable in the first place.
 
@@ -460,6 +460,45 @@ same table while there. Guard: `t/motortest.py` carries a leg that asserts today
 Until then the motor suite drives the PCA with the byte form `MOV CCON,#0x40`, which is legal on
 the real part, and says so in a comment.
 
+**D17 — FIXED 2026-11-15: setting `AUXR.AO` silenced the UART on the RD2.** `serial.cc:686` read
+bit 0 of `AUXR` (`8Eh`) as the STC `S1BRS`/`S1ST2` baud-clock select on every part that reached
+it, because the test was "is there an `AUXR` cell" rather than "is this an STC part". On the
+AT89C51RD2 that bit is `AUXR.AO` — ALE/EMI control (doc4235 §9, `doc4235-spec.md:499`) — and
+firmware sets it for ALE reasons that have nothing to do with the port. Measured: with `AO=1`
+timer 1 stopped supplying overflows to the baud path, `TI` never set, and a transmit loop hung
+having emitted nothing. Fix: take the STC reading only from parts that carry the bit —
+`(uc->type->type & CPU_STC12) ? s->get(AUXR) : 0` — the same mask the rest of the STC-specific
+code uses (`interrupt.cc:99`); every STC part in this fork sets `CPU_STC12` (`globals.cc:408-417`)
+and no Atmel part does. Gate: leg 9 of `t/euarttest.py` (`leg_baud_source_isolation`), whose
+control pair differs *only* in that bit (`ORL AUXR,#0` against `ORL AUXR,#1`, same instruction
+length) and whose sensitivity row switches the timer-2 baud source off and must stop transmitting;
+the pre-fix binary emits nothing where the fixed one emits `0x30`.
+
+**D18 — FIXED 2026-11-15: leaving clock-out mode left timer 2 at a third of its rate.** The
+`T2MOD` write path set the internal mode to `T2MODE_CLKOUT` when `T2OE` was written and never gave
+the mode back when `T2OE` was cleared, so a timer 2 that had *ever* been a clock output kept
+advancing `TL2` 3 counts per machine cycle instead of 1 — as a baud-rate timer, in capture mode,
+whatever the mode bits now said. Fix: the mode comes from `T2CON` through a new
+`mode_from_tcon()` helper (the duplicated if-chain in the `T2CON` path, including its dead
+`T2MODE_OFF` branch, now calls the same function), and the `T2MOD` path re-derives the mode before
+honouring a `DCEN` write. Other parts are untouched by construction: `t2_clock_out` is added only
+by `uc89c51r.cc:96` and the STC15 subclass does not override `write()`. Gate: `t/t2oetest.py`
+gained a "leaving clock out" section that measures the **rate** as `TL2` counts per machine cycle —
+2.71 against an expected 3 while `T2OE` stays set, 1.09 against 1 after clearing it. A pin-level
+check was tried first and is insensitive here (even the toggle count reads `0xff`), which is why
+the gate is a rate and not a waveform.
+
+**D19 — FIXED 2026-11-15: timer 2's clock output also drove the baud clock.**
+`do_t2_clock_out()` publishes `EV_OVERFLOW` on every tick (`timer2.cc:380`) and `cl_serial`
+counted that event as a baud tick whatever timer 2 was doing: with `T2OE` set and `TCLK` clear —
+clock out on `P1.0`, baud from timer 1 — the UART ran at the clock-out rate and emitted a second
+byte. Fix: the serial `EV_OVERFLOW` branch ignores the event unless timer 2 is actually the baud
+source (`if (!t2_baud) break;`), `t2_baud` now tracks the real mode (the `EV_T2_MODE_CHANGED`
+payload masks `RCLK|TCLK` out unless the mode is `T2MODE_BAUDRATE`, on both write paths), and
+`cl_serial::reset()` clears it because `clear_sfr()` zeroes `T2CON` without notifying anyone. The
+only other consumer of that event is `pca.cc`, which listens on `id == 0`. Gate: leg 9 again,
+sensitivity direction — the pre-fix binary emits `0x30 0x31` where the fixed one emits `0x30`.
+
 ### 3.1 Ruled out while auditing the datasheet — do not "fix" these
 
 Four things look like defects against a secondary reading and are not. Each was
@@ -513,6 +552,71 @@ These cannot be resolved from doc4235K; each needs a recorded choice, not resear
   model gap.
 - `AUXR1` bit 2 reads 0 and is not writable; `WDTPRG` period units are misprinted
   (ms vs s). The 12 remaining voids are listed in `doc4235-spec.md`.
+
+### 3.3 External review of 2026-11-15 (`~/s51/RD2-REVIEW.md`) — verdicts
+
+Eleven items, each verified against the tree or a probe before anything was changed. Two of the
+review's own claims did not survive that check and one of its diagnoses was backwards; all three
+are recorded here rather than dropped quietly.
+
+- **`SPCON` reset comment — real, comment only.** Table 16-3 (printed p.69) orders the bits
+  `SPR2 SPEN SSDIS MSTR CPOL CPHA SPR1 SPR0`, so the reset value `0x14` is MSTR *and* CPHA set
+  with **SSDIS clear** — not "SSDIS=1, CPHA=1", which both `uc89c51r.cc` and
+  `doc4235-spec.md:391` asserted. The model had it right all along (a cold `info hw spi` prints
+  `SPCON=0x14 … SSDIS=0 MSTR=1`), which is what made this documentation rather than behaviour.
+  Both texts corrected; the datasheet gloss now cites the bit order that refutes the old reading.
+- **`CKRL` comment — stale.** It still claimed the prescaler divider was unmodelled; it is
+  modelled (`cl_uc89c51r::ckrl_divider()`, pinned by `t/ckrltest.py` 35/35). Rewritten to point
+  at the divider and its gate.
+- **Duplicate `BRL`/`BDRCON` bindings — half right, direction reversed.** The duplication is
+  real (`sfr_tab51` rows alongside `cl_rd2_brg`'s own bindings) and `cl_var_list::add()` does
+  silently delete a same-name var (`var.cc:360-372`), but `cl_51core::init()` builds the
+  peripherals (`uc51.cc:986`) *before* `make_vars()` (`:991`), so the table rows were clobbering
+  the BRG's descriptions, not the reverse. The two rows are gone and the reason is written where
+  each reader would look (`uc51.cc`, `rd2_brg.cc`); `info var BRL` prints its description now.
+- **Boot-ROM counters survived `reset` — real.** `cl_rd2_boot::reset()` re-activated the ENBOOT
+  bank and left `n_calls` / `n_refused` / `n_written` / `n_erased` / `last_cmd` / `last_result`
+  describing the previous run, while every other element zeroes its own (`cl_rd2_spi::reset()`
+  zeroes `n_modf`). `USER_CALL=` and the array still survive on purpose: one is the fixed entry
+  address from table 24-10, the other is flash. Gate: `t/bootromtest.py` **70/70** with two new
+  legs; the pre-fix binary reads `calls=1 bytes_written=1` *after* the reset.
+- **`MODF` did not re-arm — real.** `do_modf()` clears `SPEN`, so restoring `SPEN` under a still
+  low `SS` is a fresh fault, not a repeat. The guard tested the flag that had just been raised, so
+  a routine that wrote `SPCON` *without* the documented `SPSTA` read cleared the fault without
+  clearing the condition and the byte shifted anyway (`SPIF=1 bytes=1`, `MODF=1`, `SS=0`) —
+  probed end to end, not inferred. Guard removed; `t/spitest.py` **58/58** with a two-variant leg:
+  `rearm-clear` (the documented sequence, which already behaved) and `rearm-dirty` (the
+  discriminator, which fails on the pre-fix binary).
+- **`st.unusable` counted but never printed — real.** `read_sym_file()` tallied the names this
+  console can never type — as51 lists bit names like `ACC.0` in the same table as byte names —
+  and reported every other dropped class but that one. Now reported in the same block; the suite
+  gained `t/symtest_bits.sym` (a real table carrying `ACC.0`/`TCON.6`/`TR0`) and a leg the
+  pre-fix binary fails.
+- **`.sym` autoload needed the extension-less name — real.** The sibling `.cdb`/`.map`/`.sym`
+  search was guarded by `strcmp(nam, f->get_fname()) != 0`, so it ran only when the loader had
+  *guessed* the extension: `file prog` bound the symbols, `file prog.ihx` silently did not. The
+  guard is gone; the stem is the typed name with its own extension dropped, so both spellings
+  behave alike. `t/symtest.py` pins both (16/16) and the exact-name leg fails pre-fix.
+- **Motor: no backlash on the first move after power-on — true, by design, undocumented.**
+  `slack` resets to 0, so the model starts wound against the flank it is about to be driven off.
+  A gearbox parked inside its play would give that play up whichever way it is first driven, and
+  nothing on the part records which way that was; zero is the one starting point that makes the
+  first measured move reproducible. Documented at the reset site, not changed.
+- **Motor: "a real 8051 counts FALLING" — code half right, datasheet half unowned.** Both edges
+  are emitted, which is exactly what makes a counter's polarity not matter; but
+  `doc4235-spec.md` says nowhere which flank the counter gate answers, and this plan already
+  lists t0/t1 versus timer-2 polarity as open. The header now states the question as open here
+  instead of asserting an answer it cannot cite.
+- **`floor.sh` process hygiene — real symptom, pre-existing cause.** One console reparented to
+  PID 1 by an earlier session made every floor report `process-leak(1)`, because the check was
+  absolute. It now snapshots the reparented set before the suites and counts only what appears
+  during the run, listing pre-existing ones as a warning ("already reparented (not counted)").
+  Tested both directions: a decoy planted before the run is reported and not counted, a decoy
+  planted mid-run is counted and the floor exits non-zero.
+- **Two claims that did not survive checking.** `bpcmdtest`/`symtest`/`maptest` dying with *No
+  module named simproc* was a gap in the development mirror, which lacked `t/simproc.py`; a clean
+  clone of the published tree passes all three. And `motortest` is not "not counted as a gate" —
+  it is in the `SUITES` list of `t/floor.sh` and counted with the rest.
 
 ---
 
@@ -1489,3 +1593,17 @@ invisible unless the dropped byte was meant to be data: a test feeds a file, get
 back than it wrote, and the missing ones are exactly the ones that carry meaning. Both belong in
 the same upstream thread as the timer-2 fix, framed as "the byte stream between the console and a
 peripheral is lossy and re-entrant in ways that look like model bugs".
+
+The 2026-11-15 review round added three more, and it is worth separating the two that are
+general from the one that is latent. **D17 is general**: `cl_serial` reads `AUXR` bit 0 wherever
+an `AUXR` cell exists, so any derivative that owns that address for another reason — on the RD2
+it is `AO`, the ALE/EMIF control — inherits a baud-clock select it never asked for, and the fix
+is a `CPU_STC12` type mask, the idiom `interrupt.cc` already uses. **D19 is latent in shared
+code**: `do_t2_clock_out()` publishes `EV_OVERFLOW`, and the serial side counts any
+`EV_OVERFLOW` from timer 2 as a bit clock, so the moment a part carries `t2_clock_out` its clock
+output starts driving the UART; today no upstream part sets that feature, which is exactly why
+nobody has hit it. **D18 is RD2-only for the same reason** — both writes of `T2MODE_CLKOUT` are
+gated on the feature (`timer2.cc:130`, `:159`), so the mode cannot leak on a part that lacks it,
+but the bookkeeping lives in shared `timer2.cc` and the next part to adopt clock out inherits the
+bug. Frame all three as one message with the timer-2 `cycles` fix: the baud clock and the
+counter clock are being taken from events that do not say which role the timer is in.

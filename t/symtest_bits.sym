@@ -1,0 +1,25 @@
+ASxxxx Assembler V01.80 + NoICE + SDCC mods  (Intel 8051), page 1.
+
+Symbol Table
+
+    ACC                                                            0030 G
+    IE                                                             0031 G
+  C _main                                                          0030 GR
+  C _load_acc                                                      003A GR
+  B ACC.0                                                          00E0 GR
+  B TCON.6                                                         0088 GR
+  B TR0                                                            008C GR
+  B _counter                                                       0030 GR
+  B _flag                                                          0040 GR
+    _sp                                                            0081 
+  D _bitvar                                                        0000 GR
+  C __undefined_sym                                                 **** GX
+
+ASxxxx Assembler V01.80 + NoICE + SDCC mods  (Intel 8051), page 2.
+
+Area Table
+
+  0 _CODE                                                          size    0   flags    0
+  D BSEG                                                           size    8   flags   80
+  B DSEG                                                           size   30   flags    0
+  C CSEG                                                           size  4D1   flags   20

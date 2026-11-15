@@ -93,6 +93,7 @@ F = 'file "%s"' % IMG
 SYM = 'sym "%s"' % fixture("symtest.sym")
 SYMN = 'sym "%s"' % fixture("symtest_narrow.sym")
 SYMB = 'sym "%s"' % fixture("symtest_bad.sym")
+SYMBIT = 'sym "%s"' % fixture("symtest_bits.sym")
 
 # t/isa.ihx: 0x30 is `_main' (the first instruction of the program body), 0x33 is
 # `MOV A,#0x5a', 0x3a `MOV A,0x41' is crossed exactly once, and iram[0x30] holds
@@ -307,10 +308,13 @@ def warns_about_areas(out):
 
 
 def auto_load_pair():
-    """A directory of the suite's own holding prog.ihx and prog.sym: `file
-    "DIR/prog"' (the name without its extension, which is how the sibling is
-    found) has to bind the names without any `sym' command.  t/ itself must never
-    grow a `.sym' beside an image the other suites load."""
+    """A directory of the suite's own, holding prog.ihx and prog.sym.  Both spellings of
+    the name have to bind the sibling without any `sym' command: `file "DIR/prog"' (the
+    stem, whose extension the loader guesses) and `file "DIR/prog.ihx"' (the exact name).
+    The assembler writes the two files side by side whichever the user types, so the pair is
+    the fixture; the second spelling is the one the original guard skipped, because it only
+    fired when an extension had been guessed.  t/ itself must never grow a `.sym' beside an
+    image the other suites load."""
     d = tempfile.mkdtemp(prefix="symtest-")
     shutil.copyfile(IMG, os.path.join(d, "prog.ihx"))
     shutil.copyfile(fixture("symtest.sym"), os.path.join(d, "prog.sym"))
@@ -322,6 +326,16 @@ def auto_loaded(out):
     read is the diagnostic only read_sym_file prints, plus the binding."""
     if not has(out, "kept it: ACC"):
         return "loading the image did not read the .sym beside it"
+    return binds("_main", "rom[0x0030]")(out)
+
+
+def bit_names_counted(out):
+    """as51 lists bit names (`ACC.0', `TCON.6') in the same table as the byte names, and
+    this console can never type those, so they are not bound.  Silently dropping them is the
+    defect this leg pins: the count line is the only notice that the table was read only
+    part of the way, and the usable half still has to bind."""
+    if not has(out, "could never be typed at the console"):
+        return "the bit-style names were dropped without a count"
     return binds("_main", "rom[0x0030]")(out)
 
 
@@ -357,6 +371,10 @@ LEGS = [
      bare_var_still_allocates),
     ("image loads its own .sym", ['file "%s"' % AUTO_BASE, "info variables"],
      auto_loaded),
+    ('exact name loads the sibling too', ['file "%s/prog.ihx"' % AUTO_DIR,
+                                          "info variables"], auto_loaded),
+    ("bit names counted, not dropped", [F, SYMBIT, "info variables"],
+     bit_names_counted),
 ]
 
 

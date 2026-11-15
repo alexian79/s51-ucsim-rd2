@@ -108,7 +108,7 @@ Confirmed by grep, and re-checked after every phase. Addresses below come from d
 Off this list since the audit: `CKCON0` (see **X2 mode** below), `PCON.POF` (reset `00X1 0000b` =
 Table 21-1 p.87: POF is *set* out of reset and cleared by software; the power-fail comparator itself
 stays unmodelled by decision), the internal baud-rate
-generator (`BRL` 0x9A / `BDRCON` 0x9B — `t/euarttest.py`, 34 checks reproducing the datasheet's own
+generator (`BRL` 0x9A / `BDRCON` 0x9B — `t/euarttest.py`, 38 checks reproducing the datasheet's own
 table vectors to the clock), the enhanced UART's receive side (`SM2` multiprocessor address filter,
 the `uart0_rx9` 9th-bit/stop-bit input framing, and the `SMOD0`→`SCON.7` framing-error mux —
 `t/uartmp.py`, 19 checks), the **keyboard interface** (see **Keyboard interface** below), and the
@@ -146,7 +146,7 @@ Master and slave on four shared Port 1 pins — `SS` P1.1, `MISO` P1.5, `SCK` P1
 `SPR2`/`SPR1`/`SPR0` ladder `/2 … /128` (that ladder is printed on p.70; the row block spills off
 p.69). `SS` is the same pin `TEXEN` watches for a timer-2 reload, so every SPI pin write is a
 read-modify-write of the `P1` latch, and `t/spitest.py` runs a leg with `TEXEN` live to prove the
-two features do not corrupt each other (56 checks; `t/spi-report.md` is the build report).
+two features do not corrupt each other (58 checks; `t/spi-report.md` is the build report).
 
 All four `CPOL`/`CPHA` modes come out of one rule: a byte is 16 half-periods and the sampling edge
 is chosen by `CPHA` alone — `CPOL` never appears in it — so `SPIF` lands on the eighth sample,
@@ -420,10 +420,10 @@ the new banking (126 bank lines + 11 chip/decoder lines) plus the pre-existing u
 and banner artifacts.
 
 Items (1)-(11) are the whole delta from the vendored commit: `git -C vendor/ucsim-stc diff --stat`,
-with the four configure-generated files below excluded, reports **28 tracked files, 2514 insertions,
-192 deletions** (measured 2026-11-15 on the regenerated patch); that count *excludes* the 12
+with the four configure-generated files below excluded, reports **28 tracked files, 2597 insertions,
+223 deletions** (measured 2026-11-15 on the regenerated patch); that count *excludes* the 12
 untracked new files (`rd2_brg`, `rd2_kbd`, `rd2_spi`, `rd2_boot`, `rd2_eeprom`, `rd2_motor` and
-their headers, 3539 lines).
+their headers, 3565 lines).
 `patches/rd2-vs-ucsim-stc-441710c.patch` carries all **40** and is verified by applying it to a
 clean clone of `441710c`: zero content differences against the tree every suite here was run
 against, and a from-that-patch build passes the floor. `~/s51/rd2-fixes.patch` is the **X2-era
@@ -460,7 +460,7 @@ a bank selected through `MOV AUXR1,A` — and only then checks that the `Bank51`
 into line, so a future language that resolves the case by itself fails the middle leg instead of
 silently passing.
 
-**SPI bit clock** (`t/spitest.py`, 56/56): the byte time is asserted without any fitted constant.
+**SPI bit clock** (`t/spitest.py`, 58/58): the byte time is asserted without any fitted constant.
 The overhead-free quantity is the **cross-divider difference**, `per_byte(BD=128) − per_byte(BD=2)
 = 16·(128−2) = 2016` oscillator clocks — measured 2016.0 — because one run's byte time also
 carries the poll loop's fixed cost. Probe order is part of the method: `info hardware spi` reads the

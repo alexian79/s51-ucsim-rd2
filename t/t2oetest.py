@@ -85,9 +85,10 @@ def first_toggle(rcap, t2mod, t2con=TR2, span=8):
 results = []
 
 
-def case(name, expect, got, unit, note=""):
+def case(name, expect, got, unit, note="", tol=None):
     if isinstance(expect, (int, float)) and isinstance(got, (int, float)):
-        ok = abs(expect - got) <= max(1.0, abs(expect) * 0.02)
+        ok = abs(expect - got) <= (tol if tol is not None
+                                   else max(1.0, abs(expect) * 0.02))
     else:
         ok = expect == got
     results.append((name, expect, got, ok, note, unit))
@@ -117,6 +118,61 @@ case("T2OE clear: P1 never moves", "0xff", hx(measure(0xff00, 0x00, TR2, 200)),
      "P1", "200 steps = 8x the shortest period above")
 case("T2OE set, TR2 clear: static", "0xff", hx(measure(0xff00, T2OE, 0x00, 200)),
      "P1", "clock out still needs TR2")
+
+# --- leaving clock out: T2OE is a mode, not a side flag ----------------------------
+# The row above starts from T2MOD=0 and so is blind to a mode that is entered and then
+# asked to leave: nothing hands the mode back, and TL2 keeps counting at 3 per machine
+# cycle with the pin toggling.  A pin check cannot carry this either -- at P=256 over a
+# long budget P1.0 toggles an even number of times and reads back 0xff whether or not
+# clock out is running -- so the signal is TL2 counts per machine cycle, and the two
+# runs differ by a single MOV.
+RUN_STEPS = 20
+
+
+def raw(code, steps):
+    """(P1 latch, TL2) after `steps` instructions running `code` verbatim."""
+    img = "/tmp/t2oe_raw_%x_%x_%d.hex" % (len(code), sum(code) & 0xffff, steps)
+    write_hex(img, code)
+    cmds = ['file "%s"' % img, "step %d" % steps, "dump sfr[0x90]", "dump sfr[0xcc]",
+            "exit"]
+    p = subprocess.run([SIM, "-t", "89C51R", "-c", "-"], input="\n".join(cmds) + "\n",
+                       capture_output=True, text=True, cwd="/tmp", timeout=300)
+
+    def cell(addr):
+        m = re.search(r"^0x%x \S+:\s+\S+\s+(0x[0-9a-f]+)" % addr, p.stdout + p.stderr, re.M)
+        return int(m.group(1), 16) if m else None
+
+    return cell(P1), cell(TL2)
+
+
+def t2oe_sequence(keep, rcap=0xff00):
+    """Start T2, enter clock out, then (unless `keep`) ask to leave it."""
+    lo, hi = rcap & 0xff, (rcap >> 8) & 0xff
+    c = bytearray(pre([(RCAP2L, lo), (RCAP2H, hi), (TL2, 0x00), (TH2, 0xff),
+                       (T2CON, TR2)]))
+    c += bytes([0x75, T2MOD, T2OE])
+    if not keep:
+        c += bytes([0x75, T2MOD, 0x00])
+    return bytes(c) + SJMP
+
+
+def machine_cycles(keep, steps):
+    """MOV direct,#data is 1 MC and SJMP is 2, so the spent budget is exact."""
+    setup = 6 if keep else 7
+    return setup + 2 * (steps - setup)
+
+
+_, k_tl2 = raw(t2oe_sequence(True), RUN_STEPS)
+_, c_tl2 = raw(t2oe_sequence(False), RUN_STEPS)
+keep_rate = None if k_tl2 is None else k_tl2 / float(machine_cycles(True, RUN_STEPS))
+clear_rate = None if c_tl2 is None else c_tl2 / float(machine_cycles(False, RUN_STEPS))
+case("T2OE kept: 3 counts/MC", 3.0, -1 if keep_rate is None else round(keep_rate, 2),
+     "counts/MC", "sensitivity guard; the deficit below 3.0 is the T2MOD write itself",
+     tol=0.5)
+case("T2OE entered then left: 1 count/MC", 1.0,
+     -1 if clear_rate is None else round(clear_rate, 2), "counts/MC",
+     "the mode returns to what T2CON asks for, without waiting for the next T2CON write",
+     tol=0.3)
 
 print("%-33s %12s %12s %6s  %s" % ("case", "expected", "measured", "unit", "verdict"))
 bad = 0

@@ -689,6 +689,24 @@ def leg_flash_survives_reset():
           "both to disabled)", byte_at(t, AUXR1) == 0x00, byte_at(t, AUXR1))
 
 
+def leg_counters_are_reset_scoped():
+    """`info hw boot' is a report about the run, so its counters are run state: `reset' is
+    where a run starts over, exactly as cl_rd2_spi::reset() zeroes n_modf.  A report that
+    survived `reset' would credit a fresh session with the previous one's flash writes --
+    the very thing the counters are read for.  The array keeps its contents (previous leg)
+    and USER_CALL= stays 0xfff0, because that is the entry address from table 24-10, not
+    state."""
+    code, n = api(0x02, acc=0x5c, dptr0=0x0100)
+    img, n = program_image("ctrs", code + sjmp(), n + 1)
+    t = run(img, ["step %d" % (n + SLACK), "info hw boot", "reset", "info hw boot"], "ctrs")
+    rows = re.findall(r"calls=(\d+) refused=(\d+) bytes_written=(\d+) bytes_erased=(\d+)", t)
+    check("the call is counted before the reset and gone after it: %s" % (rows,),
+          len(rows) == 2 and rows[0] == ("1", "0", "1", "0")
+          and rows[1] == ("0", "0", "0", "0"), rows)
+    check("the last-result string starts over too", t.count("no USER_CALL yet") == 1,
+          t.count("no USER_CALL yet"))
+
+
 def leg_nothing_leaks_to_89c51r():
     """The AT89C51RB2/RC2 share cl_uc89c51r and have no boot ROM, so they must not gain the
     element, the window or the call: writing AUXR1.5 there is a write to a reserved bit and
@@ -753,6 +771,7 @@ def main():
     leg_program_page_must_stay_in_one_page()
     leg_timing_decision()
     leg_flash_survives_reset()
+    leg_counters_are_reset_scoped()
     leg_nothing_leaks_to_89c51r()
     leg_reference_proof(REF)
     print("\nChecks run: %d  Failed: %d" % (_checks, len(_failures)))
